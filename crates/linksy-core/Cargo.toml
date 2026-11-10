@@ -27,6 +27,9 @@ iroh = { version = "1.4.0", default-features = false, features = ["tls-ring", "p
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.191"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
+
 [features]
 default = ["away"]
 # Without it (`--no-default-features`) Linksy has no relay code at all and never reaches

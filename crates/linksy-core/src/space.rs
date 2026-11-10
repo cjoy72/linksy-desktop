@@ -43,7 +43,18 @@ fn free_at(path: &Path) -> Option<u64> {
     Some((stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64))
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn free_at(path: &Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut available = 0u64;
+    // SAFETY: a NUL-terminated path, and a u64 for the bytes this user may use
+    let ok = unsafe { GetDiskFreeSpaceExW(wide.as_ptr(), &mut available, std::ptr::null_mut(), std::ptr::null_mut()) };
+    (ok != 0).then_some(available)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn free_at(_: &Path) -> Option<u64> {
     None
 }
@@ -61,7 +72,7 @@ mod tests {
         assert_eq!(show(2_100_000_000), "2.1 GB");
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn a_folder_that_does_not_exist_yet_counts_for_the_one_it_will_be_in() {
         let dir = tempfile::tempdir().unwrap();

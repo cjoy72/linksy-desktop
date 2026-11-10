@@ -11,7 +11,7 @@ use std::time::Duration;
 use linksy_core::{Fingerprint, Link, Node, Session, SessionKind, Uuid};
 use linksy_ipc::{ActiveSession, PendingSession};
 use tokio::io::AsyncWriteExt;
-use tokio::net::{UnixListener, UnixStream};
+use linksy_ipc::local;
 use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
 use tracing::{debug, info, warn};
@@ -230,7 +230,7 @@ impl Sessions {
             _ => "webcam",
         };
         let path = socket_path(role, session.id);
-        let listener = bind(&path)?;
+        let mut listener = bind(&path)?;
         let mut cmd = helper_command("linksy-screen");
         cmd.arg(role).arg("--socket").arg(&path);
         if !device {
@@ -299,7 +299,7 @@ impl Sessions {
             }
         };
         let _ = std::fs::remove_file(&path);
-        let (stream, _) = accepted.map_err(|_| std::io::Error::other("no screen was picked in time"))??;
+        let stream = accepted.map_err(|_| std::io::Error::other("no screen was picked in time"))??;
         relay(&mut session, stream).await;
         stop_helper(&mut child).await;
         Ok(())
@@ -323,7 +323,7 @@ impl Sessions {
         let mut buf = vec![0u8; 64 * 1024];
         loop {
             let path = socket_path("webcam", session.id);
-            let listener = bind(&path)?;
+            let mut listener = bind(&path)?;
             let mut child = helper_command("linksy-screen")
                 .arg("webcam")
                 .arg("--socket")
@@ -342,7 +342,7 @@ impl Sessions {
                 }
             };
             let _ = std::fs::remove_file(&path);
-            let (mut local, _) = accepted.map_err(|_| std::io::Error::other("the webcam didn't start"))??;
+            let mut local = accepted.map_err(|_| std::io::Error::other("the webcam didn't start"))??;
             // Video to the helper, camera_control frames to the phone, until the session
             // ends (return) or the frame rate changes (start again).
             let next = loop {
@@ -378,17 +378,18 @@ impl Sessions {
     /// Start viewing a session this device asked for: returns the socket the app reads.
     pub fn view(&self, session: Session) -> std::io::Result<PathBuf> {
         let path = socket_path("view", session.id);
-        let listener = bind(&path)?;
+        let mut listener = bind(&path)?;
         self.relay_when_joined(session, listener, path.clone());
         Ok(path)
     }
 
+    #[cfg(target_os = "linux")]
     /// A phone's screen to show here while this computer drives it over the cable: the
     /// video as usual, while the viewer's clicks and keys go to the phone's virtual
     /// touchscreen and keyboard (`usb_hid`), not to its app.
     pub fn view_driven(&self, session: Session, dev: nusb::Device, node: Node) -> std::io::Result<PathBuf> {
         let path = socket_path("view", session.id);
-        let listener = bind(&path)?;
+        let mut listener = bind(&path)?;
         let id = session.id;
         let info = active(&session);
         let running = self.running.clone();
@@ -397,7 +398,7 @@ impl Sessions {
             let mut session = session;
             let accepted = tokio::time::timeout(VIEW_TIMEOUT, listener.accept()).await;
             let _ = std::fs::remove_file(&socket);
-            if let Ok(Ok((stream, _))) = accepted {
+            if let Ok(Ok(stream)) = accepted {
                 match crate::usb_hid::Hid::register(dev).await {
                     Ok(hid) => drive(&mut session, stream, hid, &node).await,
                     Err(e) => {
@@ -416,7 +417,7 @@ impl Sessions {
     /// see): keep the stream for the app, opening the app if needed.
     pub(crate) fn show(&self, session: Session) -> std::io::Result<()> {
         let path = socket_path("view", session.id);
-        let listener = bind(&path)?;
+        let mut listener = bind(&path)?;
         self.pending.lock().unwrap().insert(
             session.id,
             PendingSession { session: session.id, peer: session.peer.clone(), kind: session.kind, socket: path.clone() },
@@ -431,7 +432,7 @@ impl Sessions {
         Ok(())
     }
 
-    fn relay_when_joined(&self, mut session: Session, listener: UnixListener, path: PathBuf) {
+    fn relay_when_joined(&self, mut session: Session, mut listener: local::Listener, path: PathBuf) {
         let id = session.id;
         let info = active(&session);
         let (running, pending) = (self.running.clone(), self.pending.clone());
@@ -439,7 +440,7 @@ impl Sessions {
             let accepted = tokio::time::timeout(VIEW_TIMEOUT, listener.accept()).await;
             let _ = std::fs::remove_file(&path);
             pending.lock().unwrap().remove(&id);
-            if let Ok(Ok((stream, _))) = accepted {
+            if let Ok(Ok(stream)) = accepted {
                 relay(&mut session, stream).await;
             }
             running.lock().unwrap().remove(&id);
@@ -518,8 +519,8 @@ fn picture_for(link: Option<Link>) -> (u32, u32) {
 
 /// Copy media and control between the session and the helper's socket until either side
 /// stops. Dropping the session afterwards closes it on the other device.
-async fn relay(session: &mut Session, local: UnixStream) {
-    let (mut local_rx, mut local_tx) = local.into_split();
+async fn relay(session: &mut Session, local: local::Stream) {
+    let (mut local_rx, mut local_tx) = local::split(local);
     let (send, recv) = (&mut session.send, &mut session.recv);
     tokio::select! {
         _ = tokio::io::copy(&mut local_rx, send) => {}
@@ -528,12 +529,13 @@ async fn relay(session: &mut Session, local: UnixStream) {
     let _ = session.send.shutdown().await;
 }
 
+#[cfg(target_os = "linux")]
 /// The phone's video to the viewer, and the viewer's input to the phone's virtual devices.
 /// Text goes through the phone's clipboard and a paste, whatever its keyboard layout.
-async fn drive(session: &mut Session, local: UnixStream, hid: crate::usb_hid::Hid, node: &Node) {
+async fn drive(session: &mut Session, local: local::Stream, hid: crate::usb_hid::Hid, node: &Node) {
     use tokio::io::AsyncReadExt;
     let mut hid = Unplug(Some(hid));
-    let (mut local_rx, mut local_tx) = local.into_split();
+    let (mut local_rx, mut local_tx) = local::split(local);
     let phone = session.peer.id;
     info!("driving {} over the cable", session.peer.name);
     // A phone with its display turned says so; taps are turned back for it
@@ -609,10 +611,12 @@ async fn drive(session: &mut Session, local: UnixStream, hid: crate::usb_hid::Hi
     let _ = session.send.shutdown().await;
 }
 
+#[cfg(target_os = "linux")]
 /// Unplugs a phone's virtual devices when driving stops, however it stops (an ended
 /// session aborts its task): a keyboard left plugged in would hide the phone's own.
 struct Unplug(Option<crate::usb_hid::Hid>);
 
+#[cfg(target_os = "linux")]
 impl Drop for Unplug {
     fn drop(&mut self) {
         if let Some(hid) = self.0.take() {
@@ -630,12 +634,9 @@ fn socket_path(role: &str, id: Uuid) -> PathBuf {
     dir.join(format!("linksy-{role}-{}.sock", id.simple()))
 }
 
-fn bind(path: &Path) -> std::io::Result<UnixListener> {
-    let _ = std::fs::remove_file(path);
-    let listener = UnixListener::bind(path)?;
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-    Ok(listener)
+/// A private socket (Windows: a named pipe) only this user can open.
+fn bind(path: &Path) -> std::io::Result<local::Listener> {
+    local::Listener::bind(path)
 }
 
 /// A Linksy program next to this binary (installed or in target/), else from PATH.
@@ -664,6 +665,17 @@ pub(crate) async fn virtual_monitors() -> bool {
     if x11() {
         return false;
     }
+    portal_virtual_monitors().await
+}
+
+/// Windows: no virtual monitors yet.
+#[cfg(not(target_os = "linux"))]
+async fn portal_virtual_monitors() -> bool {
+    false
+}
+
+#[cfg(target_os = "linux")]
+async fn portal_virtual_monitors() -> bool {
     // Their portals can't (#42), but Linksy makes a headless output there itself
     let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().to_lowercase();
     if ["hyprland", "sway"].iter().any(|d| desktop.contains(d)) {
@@ -688,6 +700,9 @@ pub(crate) async fn virtual_monitors() -> bool {
 
 /// Why there's no second display here, for the app and the notification.
 pub(crate) fn no_virtual_monitors() -> String {
+    if cfg!(windows) {
+        return linksy_i18n::t!("Second Display isn't available on Windows yet.").into();
+    }
     if x11() {
         return linksy_i18n::t!("Second Display needs a Wayland session: X11 can't add a monitor. GNOME, KDE Plasma, Hyprland and Sway on Wayland can.").into();
     }
@@ -789,7 +804,8 @@ impl Output {
 fn scopes() -> bool {
     static SCOPES: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *SCOPES.get_or_init(|| {
-        std::env::var_os("FLATPAK_ID").is_none()
+        cfg!(target_os = "linux")
+            && std::env::var_os("FLATPAK_ID").is_none()
             && std::process::Command::new("systemd-run")
                 .args(["--user", "--scope", "--quiet", "--collect", "--expand-environment=no", "--", "true"])
                 .stdout(std::process::Stdio::null())
@@ -802,6 +818,7 @@ fn scopes() -> bool {
 /// Ends a helper politely: SIGTERM, and a moment to put back what it made (the microphone's
 /// virtual source), before it is killed.
 async fn stop_helper(child: &mut tokio::process::Child) {
+    #[cfg(unix)]
     if let Some(pid) = child.id() {
         // SAFETY: a plain kill(2) to a child this process started
         unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
@@ -845,7 +862,8 @@ pub(crate) fn open_window(socket: &Path) {
 }
 
 pub(crate) fn helper(name: &str) -> PathBuf {
-    std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join(name))).filter(|p| p.exists()).unwrap_or_else(|| PathBuf::from(name))
+    let file = format!("{name}{}", std::env::consts::EXE_SUFFIX);
+    std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join(&file))).filter(|p| p.exists()).unwrap_or_else(|| PathBuf::from(name))
 }
 
 /// A second display for a screen of `w`×`h`: the same shape, at most 1080 pixels high,
@@ -879,7 +897,7 @@ mod tests {
 
 /// Needs a running Sway or Hyprland (SWAYSOCK or HYPRLAND_INSTANCE_SIGNATURE), e.g. a
 /// headless Sway: `WLR_BACKENDS=headless sway`.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod stop_tests {
     use std::time::{Duration, Instant};
 

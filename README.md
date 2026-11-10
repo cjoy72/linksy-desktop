@@ -31,6 +31,11 @@
 
 </div>
 
+> [!TIP]
+> **Windows:** this fork's `windows-port` branch runs Linksy's service on Windows 10 and 11, with a
+> tray icon and Windows notifications: pairing, files, clipboard, phone notifications and more. See
+> [docs/windows.md](docs/windows.md). It's unofficial and not supported by the Linksy project.
+
 > [!NOTE]
 > This repository is the Linux side: the background service, the GTK app (GNOME and most desktops) and the Qt app (KDE Plasma). The phone needs Linksy for Android, from [linksy-releases](https://github.com/LinkSy-mg/linksy-releases/releases/latest).
 

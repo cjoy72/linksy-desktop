@@ -3439,9 +3439,21 @@ pub fn folder_name(name: &str) -> String {
 /// the network were congested. The system caps what it gives (`net.core.rmem_max`).
 const SOCKET_BUFFER: usize = 8 << 20;
 
+/// A UDP socket at `addr`. On `[::]` it takes IPv4 too, said explicitly: Linux does that by
+/// default, but Windows (and BSDs) make such a socket IPv6-only, which no IPv4 phone reaches.
+fn udp_socket(addr: SocketAddr) -> std::io::Result<std::net::UdpSocket> {
+    use socket2::{Domain, Protocol, Socket, Type};
+    let socket = Socket::new(Domain::for_address(addr), Type::DGRAM, Some(Protocol::UDP))?;
+    if addr.is_ipv6() {
+        socket.set_only_v6(false)?;
+    }
+    socket.bind(&addr.into())?;
+    Ok(socket.into())
+}
+
 fn bind_endpoint(identity: &Identity, addr: SocketAddr) -> Result<quinn::Endpoint> {
     let server = |addr: SocketAddr| -> Result<quinn::Endpoint> {
-        let socket = std::net::UdpSocket::bind(addr)?;
+        let socket = udp_socket(addr)?;
         let s = socket2::SockRef::from(&socket);
         if let Err(e) = s.set_recv_buffer_size(SOCKET_BUFFER).and_then(|()| s.set_send_buffer_size(SOCKET_BUFFER)) {
             debug!("socket buffers: {e}");

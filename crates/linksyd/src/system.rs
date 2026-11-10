@@ -1,5 +1,66 @@
-//! Where things live and what this machine is called, following the XDG conventions.
+//! Where things live and what this machine is called, following the XDG conventions
+//! (on Windows, its own: the roaming app data, the user's Downloads and Pictures).
 
+#[cfg(windows)]
+pub use self::windows::*;
+#[cfg(not(windows))]
+pub use self::xdg::*;
+
+#[cfg(windows)]
+mod windows {
+    use std::path::PathBuf;
+
+    use linksy_core::DeviceKind;
+
+    fn profile() -> PathBuf {
+        std::env::var_os("USERPROFILE").map(PathBuf::from).unwrap_or_else(std::env::temp_dir)
+    }
+
+    /// `%APPDATA%\Linksy`: identity and paired devices.
+    pub fn data_dir() -> PathBuf {
+        std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(|| profile().join("AppData").join("Roaming")).join("Linksy")
+    }
+
+    /// `Downloads\Linksy`, like the phone's Downloads/Linksy.
+    pub fn download_dir() -> PathBuf {
+        profile().join("Downloads").join("Linksy")
+    }
+
+    pub fn pictures_dir() -> PathBuf {
+        profile().join("Pictures")
+    }
+
+    /// The computer's name, as Windows shows it.
+    pub fn device_name() -> String {
+        std::env::var("COMPUTERNAME").ok().filter(|n| !n.is_empty()).unwrap_or_else(|| "Windows computer".into())
+    }
+
+    /// Open a web link, file or folder with what Windows opens it with.
+    pub fn open(target: &std::ffi::OsStr) -> std::io::Result<()> {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+        use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        let target: Vec<u16> = target.encode_wide().chain(Some(0)).collect();
+        let verb: Vec<u16> = "open\0".encode_utf16().collect();
+        // SAFETY: NUL-terminated strings; no window, parameters or folder
+        let result = unsafe { ShellExecuteW(std::ptr::null_mut(), verb.as_ptr(), target.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL) };
+        // Above 32 is success
+        if result as isize > 32 { Ok(()) } else { Err(std::io::Error::last_os_error()) }
+    }
+
+    /// A machine with a battery is a laptop.
+    pub fn device_kind() -> DeviceKind {
+        use windows_sys::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
+        // SAFETY: fills in the struct it's given
+        let mut status: SYSTEM_POWER_STATUS = unsafe { std::mem::zeroed() };
+        let ok = unsafe { GetSystemPowerStatus(&mut status) } != 0;
+        // 128: no system battery; 255: unknown
+        if ok && status.BatteryFlag & 128 == 0 && status.BatteryFlag != 255 { DeviceKind::Laptop } else { DeviceKind::Desktop }
+    }
+}
+
+#[cfg(not(windows))]
+mod xdg {
 use std::path::PathBuf;
 
 use linksy_core::DeviceKind;
@@ -66,4 +127,5 @@ pub fn device_kind() -> DeviceKind {
         .map(|entries| entries.flatten().any(|e| e.file_name().to_string_lossy().starts_with("BAT")))
         .unwrap_or(false);
     if has_battery { DeviceKind::Laptop } else { DeviceKind::Desktop }
+}
 }

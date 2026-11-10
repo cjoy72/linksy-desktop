@@ -3,6 +3,7 @@
 //! Mute; dismissing it here dismisses it on the phone, and it goes away here when it goes
 //! away there. Nothing about them is written to disk except which apps are muted.
 //! Other systems keep the state (so IPC answers) but show nothing yet.
+//! Windows shows them as toasts (no Reply yet).
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
 use std::collections::HashMap;
@@ -152,10 +153,10 @@ impl Mirror {
         Ok(())
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", windows)))]
     pub async fn run(self, _node: Node) {}
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     pub async fn run(self, node: Node) {
         use linksy_core::Event;
         use tokio::sync::broadcast::error::RecvError;
@@ -185,6 +186,78 @@ impl Mirror {
                 Err(RecvError::Closed) => break,
             }
         }
+    }
+
+    /// Windows: a toast with Copy, the phone's first button and Mute; swiped away here, it's
+    /// dismissed on the phone. No Reply yet (it needs Linksy's window).
+    #[cfg(windows)]
+    fn show(&self, node: Node, from: DeviceInfo, n: RemoteNotification, code: Option<String>, copied: bool) {
+        let entry = (from.id, n.key.clone());
+        let generation = self.inner.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.inner.shown.lock().unwrap().insert(entry.clone(), Shown { from: from.clone(), notification: n.clone(), id: 0, generation });
+        let icon = n.icon.as_deref().and_then(|b64| crate::inbox::unpack(&self.inner.icons, &n.app, b64));
+        let several = node.trusted().iter().filter(|t| t.device.kind == linksy_core::DeviceKind::Phone).count() > 1;
+        let mirror = self.clone();
+        let rt = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            let summary = summary(&n.title, &n.app_name, several.then_some(from.name.as_str()), copied);
+            let mut buttons: Vec<(String, String)> = Vec::new();
+            if let Some(code) = &code {
+                buttons.push((t!("Copy {code}", code), format!("copy:{code}")));
+            }
+            if let Some(b) = n.actions.first() {
+                buttons.push((b.label.clone(), format!("act:{}", b.id)));
+            }
+            buttons.push((t!("Mute {app}", app = n.app_name), "mute".into()));
+            // Toasts take at most five buttons
+            buttons.truncate(5);
+            let current = move |m: &Mirror, entry: &(Fingerprint, String)| m.inner.shown.lock().unwrap().get(entry).is_some_and(|s| s.generation == generation);
+            let (m, e, nd, r, app, app_name) = (mirror.clone(), entry.clone(), node.clone(), rt.clone(), n.app.clone(), n.app_name.clone());
+            let on_action = move |a: &str| {
+                if !current(&m, &e) {
+                    return;
+                }
+                let (from, key) = (e.0, e.1.clone());
+                if let Some(code) = a.strip_prefix("copy:") {
+                    let _ = crate::clipboard::copy_text(code);
+                } else if a == "mute" {
+                    m.mute(&app, &app_name);
+                    m.inner.shown.lock().unwrap().remove(&e);
+                } else if let Some(action) = a.strip_prefix("act:") {
+                    let (node, action) = (nd.clone(), action.to_string());
+                    r.spawn(async move {
+                        if let Err(e) = node.notification_action(&from, &key, &action).await {
+                            warn!("notification button failed: {e}");
+                        }
+                    });
+                } else {
+                    // Clicked: seen, so it's done on the phone too
+                    m.inner.shown.lock().unwrap().remove(&e);
+                    let node = nd.clone();
+                    r.spawn(async move {
+                        if let Err(e) = node.dismiss_notification(&from, &key).await {
+                            warn!("dismissing on the phone failed: {e}");
+                        }
+                    });
+                }
+            };
+            let (m, e) = (mirror.clone(), entry.clone());
+            let dismissed = move || {
+                if !current(&m, &e) {
+                    return;
+                }
+                m.inner.shown.lock().unwrap().remove(&e);
+                let (node, from, key) = (node.clone(), e.0, e.1.clone());
+                rt.spawn(async move {
+                    if let Err(e) = node.dismiss_notification(&from, &key).await {
+                        warn!("dismissing on the phone failed: {e}");
+                    }
+                });
+            };
+            if let Err(e) = crate::notify::win::mirror(&summary, &n.body, icon.as_deref(), &buttons, on_action, dismissed) {
+                warn!("notification failed: {e}");
+            }
+        });
     }
 
     #[cfg(target_os = "linux")]

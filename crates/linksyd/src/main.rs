@@ -1,6 +1,10 @@
 //! linksyd: the always-on Linksy service. Keeps paired devices connected, receives files,
 //! and shows native notifications. Front ends (the app, the `linksy` CLI) talk to it over
-//! a Unix socket and can come and go.
+//! a Unix socket (on Windows, a named pipe) and can come and go.
+//!
+//! Windows release builds open no console window: the tray icon is the service's face there,
+//! and its log goes to `%LOCALAPPDATA%\Linksy\linksyd.log`.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod clipboard;
 mod codes;
@@ -42,14 +46,17 @@ mod file_managers;
 mod direct;
 #[cfg(target_os = "linux")]
 mod media;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 mod notify;
 mod single;
 mod system;
 #[cfg(target_os = "linux")]
 mod tray;
+#[cfg(windows)]
+mod tray_win;
 #[cfg(target_os = "linux")]
 mod usb;
+#[cfg(target_os = "linux")]
 mod usb_hid;
 #[cfg(target_os = "linux")]
 mod volume;
@@ -63,7 +70,17 @@ use tracing::{error, info};
 /// Asked to stop (`linksy_ipc::Request::Quit`).
 pub static QUIT: tokio::sync::Notify = tokio::sync::Notify::const_new();
 
+/// What a Windows computer running Linksy can do for other devices so far: no screens,
+/// cameras, microphones, decks or the computer's music yet (they need `linksy-screen` and the
+/// desktop's media players, which are Linux's).
+#[cfg(windows)]
+const FEATURES: &[&str] = &[
+    "files", "clipboard", "open_url", "ring", "battery", "media_remote", "call_state", "heartbeat", "import", "fs",
+    "notifications", "sms", "clipboard_file", "picture", "preflight",
+];
+
 /// What a Linux computer running Linksy can do for other devices.
+#[cfg(not(windows))]
 const FEATURES: &[&str] = &[
     "files", "clipboard", "open_url", "ring", "battery", "media_state", "media_remote", "call_state", "heartbeat",
     "import", "fs", "input", "screen", "control", "display", "camera", "watch", "notifications", "sms",
@@ -157,6 +174,7 @@ fn parse_args() -> Result<Args, String> {
 
 fn main() -> ExitCode {
     // Where nothing else restarts the service, this process only watches it (see supervise.rs)
+    #[cfg(unix)]
     if let Some(code) = supervise::run() {
         return code;
     }
@@ -188,6 +206,14 @@ async fn run() -> ExitCode {
     let level = std::env::var("LINKSY_LOG").ok().and_then(|l| l.parse().ok()).unwrap_or(tracing::Level::INFO);
     // Colors only for a terminal: not in the journal or the Flatpak's log file
     let ansi = std::io::IsTerminal::is_terminal(&std::io::stdout());
+    // Windows: started at sign-in (no console), the log goes to a file of its own
+    #[cfg(windows)]
+    if !ansi && let Ok(file) = linksy_logs::open_service_log() {
+        tracing_subscriber::fmt().with_max_level(level).with_target(false).with_ansi(false).with_writer(std::sync::Mutex::new(file)).init();
+    } else {
+        tracing_subscriber::fmt().with_max_level(level).with_target(false).with_ansi(ansi).init();
+    }
+    #[cfg(not(windows))]
     tracing_subscriber::fmt().with_max_level(level).with_target(false).with_ansi(ansi).init();
 
     let args = match parse_args() {
@@ -207,11 +233,11 @@ async fn run() -> ExitCode {
             return ExitCode::SUCCESS;
         }
     };
-    if tokio::net::UnixStream::connect(&args.socket).await.is_ok() {
+    if linksy_ipc::local::connect(&args.socket).await.is_ok() {
         eprintln!("linksyd is already running");
         return ExitCode::SUCCESS;
     }
-    let _ = std::fs::remove_file(&args.socket);
+    linksy_ipc::local::remove(&args.socket);
 
     let mut config = args.config;
     // Big transfers over a phone's Wi-Fi Direct link (docs/protocol.md §4.17)
@@ -241,7 +267,7 @@ async fn run() -> ExitCode {
     };
     info!("{} ({}) ready, saving files to {}", node.info().name, node.info().id.short(), node.settings().download_dir.display());
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     if args.notifications {
         tokio::spawn(notify::run(node.clone()));
     }
@@ -324,6 +350,15 @@ async fn run() -> ExitCode {
         photos: photos.clone(),
         socket: socket.clone(),
     }));
+    #[cfg(windows)]
+    tokio::spawn(tray_win::run(tray_win::Service {
+        node: node.clone(),
+        history: history.clone(),
+        sessions: sessions.clone(),
+        mirror: mirror.clone(),
+        away: away.clone(),
+        photos: photos.clone(),
+    }));
     let server = tokio::spawn(ipc::serve(node.clone(), history, sessions, mirror, away, photos, socket.clone()));
 
     let mut updated = None;
@@ -344,11 +379,20 @@ async fn run() -> ExitCode {
     // Never lingers: a service that lost the relay's one place for its id (a second copy) used
     // to hang here and stay in the tray
     let _ = tokio::time::timeout(std::time::Duration::from_secs(5), node.shutdown()).await;
-    let _ = std::fs::remove_file(&socket);
+    linksy_ipc::local::remove(&socket);
     if let Some(exe) = updated {
-        use std::os::unix::process::CommandExt;
-        let e = std::process::Command::new(exe).args(std::env::args_os().skip(1)).exec();
-        error!("could not start the new version: {e}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            let e = std::process::Command::new(exe).args(std::env::args_os().skip(1)).exec();
+            error!("could not start the new version: {e}");
+        }
+        #[cfg(not(unix))]
+        if let Err(e) = std::process::Command::new(exe).args(std::env::args_os().skip(1)).spawn() {
+            error!("could not start the new version: {e}");
+        } else {
+            std::process::exit(0);
+        }
         return ExitCode::FAILURE;
     }
     // Notifications still on screen each have a thread waiting for a click, which would
@@ -359,6 +403,10 @@ async fn run() -> ExitCode {
 /// Resolves with this program's path once a package update has replaced it (the running
 /// one then shows as deleted), so the new version takes over without a log-out.
 async fn replaced() -> PathBuf {
+    // Windows can't replace a running program; its installer stops the service first.
+    #[cfg(not(target_os = "linux"))]
+    return std::future::pending().await;
+    #[cfg(target_os = "linux")]
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(60)).await;
         let Ok(exe) = std::fs::read_link("/proc/self/exe") else { continue };
@@ -371,10 +419,27 @@ async fn replaced() -> PathBuf {
 }
 
 async fn shutdown_signal() {
-    use tokio::signal::unix::{SignalKind, signal};
-    let mut term = signal(SignalKind::terminate()).expect("SIGTERM handler");
-    tokio::select! {
-        _ = tokio::signal::ctrl_c() => {}
-        _ = term.recv() => {}
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut term = signal(SignalKind::terminate()).expect("SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = term.recv() => {}
+        }
+    }
+    // Windows: Ctrl+C, the console closing, logging off or shutting down
+    #[cfg(windows)]
+    {
+        use tokio::signal::windows::{ctrl_close, ctrl_logoff, ctrl_shutdown};
+        let mut close = ctrl_close().expect("console close handler");
+        let mut logoff = ctrl_logoff().expect("logoff handler");
+        let mut shutdown = ctrl_shutdown().expect("shutdown handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = close.recv() => {}
+            _ = logoff.recv() => {}
+            _ = shutdown.recv() => {}
+        }
     }
 }

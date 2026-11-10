@@ -129,6 +129,16 @@ pub(crate) async fn lock_screen() -> bool {
     if let Ok(cmd) = std::env::var("LINKSY_LOCK_COMMAND") {
         return tokio::process::Command::new("sh").arg("-c").arg(cmd).status().await.is_ok_and(|s| s.success());
     }
+    // Windows: the same as Win+L
+    #[cfg(windows)]
+    {
+        // SAFETY: no arguments; it only asks Windows to lock this session
+        let locked = unsafe { windows_sys::Win32::System::Shutdown::LockWorkStation() } != 0;
+        if !locked {
+            warn!("could not lock the screen: {}", std::io::Error::last_os_error());
+        }
+        return locked;
+    }
     #[cfg(target_os = "linux")]
     if let Ok(bus) = zbus::Connection::session().await {
         for (name, path) in [("org.gnome.ScreenSaver", "/org/gnome/ScreenSaver"), ("org.freedesktop.ScreenSaver", "/org/freedesktop/ScreenSaver")] {

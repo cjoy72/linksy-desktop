@@ -15,19 +15,14 @@ use crate::sessions::Sessions;
 use linksy_ipc::{Envelope, Request, ServerMsg, SessionInfo, Shared, Status};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{UnixListener, UnixStream};
+use linksy_ipc::local;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 pub async fn serve(node: Node, history: History, sessions: Sessions, mirror: Mirror, away: Away, photos: Photos, socket: PathBuf) -> std::io::Result<()> {
-    let listener = UnixListener::bind(&socket)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))?;
-    }
+    let mut listener = local::Listener::bind(&socket)?;
     loop {
-        let (stream, _) = listener.accept().await?;
+        let stream = listener.accept().await?;
         tokio::spawn(client(node.clone(), history.clone(), sessions.clone(), mirror.clone(), away.clone(), photos.clone(), stream));
     }
 }
@@ -43,8 +38,8 @@ pub async fn announce_quit() {
     }
 }
 
-async fn client(node: Node, history: History, sessions: Sessions, mirror: Mirror, away: Away, photos: Photos, stream: UnixStream) {
-    let (read, mut write) = stream.into_split();
+async fn client(node: Node, history: History, sessions: Sessions, mirror: Mirror, away: Away, photos: Photos, stream: local::Stream) {
+    let (read, mut write) = local::split(stream);
     let (tx, mut rx) = mpsc::unbounded_channel::<ServerMsg>();
 
     let mut events = node.subscribe();
@@ -172,6 +167,7 @@ pub(crate) async fn handle(node: &Node, history: &History, sessions: &Sessions, 
         Request::Devices => {
             let mut devices = node.devices();
             // Phones that can be driven over the cable say they can be controlled
+            #[cfg(target_os = "linux")]
             if let Some(usb) = crate::usb::USB.get() {
                 for d in devices.iter_mut().filter(|d| d.device.os == "android" && !d.device.features.is_empty()) {
                     if !d.device.features.iter().any(|f| f == "control") && usb.can_drive(&d.device.id, &d.device.name) {
@@ -195,7 +191,7 @@ pub(crate) async fn handle(node: &Node, history: &History, sessions: &Sessions, 
         }
         Request::Respond { request, accept } => {
             // Answered in the app: the notification asking the same goes
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", windows))]
             crate::notify::answered(request);
             Ok(Value::Bool(node.respond(request, accept)))
         }
@@ -240,6 +236,7 @@ pub(crate) async fn handle(node: &Node, history: &History, sessions: &Sessions, 
             Ok(Value::Null)
         }
         Request::Doctor => json(serde_json::to_value(crate::doctor::run(node, usb_status().phones).await)),
+        #[cfg(target_os = "linux")]
         Request::PhoneControls { phone } => {
             let id = paired(node, &phone)?;
             let controls = crate::phone_controls::CONTROLS.get().ok_or("phone controls aren't running")?;
@@ -250,20 +247,24 @@ pub(crate) async fn handle(node: &Node, history: &History, sessions: &Sessions, 
             node.set_controls(&id, change).await.map_err(|e| e.to_string())?;
             Ok(Value::Null)
         }
+        #[cfg(target_os = "linux")]
         Request::SetDndSync { phone, on } => {
             let id = paired(node, &phone)?;
             crate::phone_controls::CONTROLS.get().ok_or("phone controls aren't running")?.set_sync(id, on)?;
             Ok(Value::Null)
         }
+        #[cfg(target_os = "linux")]
         Request::ComputerNotifications { phone } => {
             let id = paired(node, &phone)?;
             json(serde_json::to_value(crate::outbox::OUTBOX.get().ok_or("notifications for phones aren't running")?.info(&id)))
         }
+        #[cfg(target_os = "linux")]
         Request::SetComputerNotifications { phone, on } => {
             let id = paired(node, &phone)?;
             crate::outbox::OUTBOX.get().ok_or("notifications for phones aren't running")?.set(id, on)?;
             Ok(Value::Null)
         }
+        #[cfg(target_os = "linux")]
         Request::MuteComputerApp { app, muted } => {
             crate::outbox::OUTBOX.get().ok_or("notifications for phones aren't running")?.mute(&app, muted)?;
             Ok(Value::Null)
@@ -441,13 +442,18 @@ pub(crate) async fn handle(node: &Node, history: &History, sessions: &Sessions, 
             node.set_allow_screen(&id, on).map_err(|e| e.to_string())?;
             Ok(Value::Null)
         }
+        #[cfg(target_os = "linux")]
         Request::DeckPrefs { phone } => json(serde_json::to_value(deck().await?.prefs(&paired(node, &phone)?))),
+        #[cfg(target_os = "linux")]
         Request::SetDeckAction { phone, action, on } => {
             deck().await?.set_action(&paired(node, &phone)?, &action, on)?;
             Ok(Value::Null)
         }
+        #[cfg(target_os = "linux")]
         Request::SetDeckCommands { commands } => json(serde_json::to_value(deck().await?.set_commands(commands)?)),
+        #[cfg(target_os = "linux")]
         Request::DeckLayouts { phone } => json(serde_json::to_value(deck().await?.layouts(&paired(node, &phone)?))),
+        #[cfg(target_os = "linux")]
         Request::SetDeckLayouts { phone, layouts } => json(serde_json::to_value(deck().await?.set_layouts(&paired(node, &phone)?, layouts)?)),
         Request::ForgetScreen => Ok(Value::Bool(sessions.forget_screen())),
         Request::Locate { device } => {
@@ -486,19 +492,24 @@ pub(crate) async fn handle(node: &Node, history: &History, sessions: &Sessions, 
             });
             Ok(Value::Null)
         }
+        #[cfg(target_os = "linux")]
         Request::TerminalStatus => json(serde_json::to_value(terminals()?.status())),
+        #[cfg(target_os = "linux")]
         Request::SetTerminalCode { code } => {
             terminals()?.set_code(code).await?;
             Ok(Value::Null)
         }
+        #[cfg(target_os = "linux")]
         Request::AllowTerminal { target, on } => {
             terminals()?.allow(resolve_any(node, history, &target)?, on);
             Ok(Value::Null)
         }
+        #[cfg(target_os = "linux")]
         Request::UnlockTerminal { target } => {
             terminals()?.unlock(resolve_any(node, history, &target)?);
             Ok(Value::Null)
         }
+        #[cfg(target_os = "linux")]
         Request::EndTerminal { terminal } => {
             if terminals()?.end(&terminal) { Ok(Value::Null) } else { Err("that terminal isn't running".into()) }
         }
@@ -547,6 +558,7 @@ pub(crate) async fn handle(node: &Node, history: &History, sessions: &Sessions, 
             }
             // A phone on the cable is driven from here, through its virtual touchscreen and
             // keyboard: its app only shows its screen
+            #[cfg(target_os = "linux")]
             if kind == linksy_core::SessionKind::Control
                 && let Some(view) = node.devices().into_iter().find(|d| d.device.id == id && d.device.os == "android")
                 && let Some(usb) = crate::usb::USB.get()
@@ -596,6 +608,23 @@ pub(crate) async fn handle(node: &Node, history: &History, sessions: &Sessions, 
             let applied = node.update_settings(settings).await.map_err(|e| e.to_string())?;
             json(serde_json::to_value(applied))
         }
+        // Linux only so far: the phone's controls, this computer's notifications on phones, decks and terminals
+        #[cfg(not(target_os = "linux"))]
+        Request::PhoneControls { .. }
+        | Request::SetDndSync { .. }
+        | Request::ComputerNotifications { .. }
+        | Request::SetComputerNotifications { .. }
+        | Request::MuteComputerApp { .. }
+        | Request::DeckPrefs { .. }
+        | Request::SetDeckAction { .. }
+        | Request::SetDeckCommands { .. }
+        | Request::DeckLayouts { .. }
+        | Request::SetDeckLayouts { .. }
+        | Request::TerminalStatus
+        | Request::SetTerminalCode { .. }
+        | Request::AllowTerminal { .. }
+        | Request::UnlockTerminal { .. }
+        | Request::EndTerminal { .. } => Err("that isn't available on this computer yet".into()),
         Request::Forget { target } => {
             let id = resolve(node, &target)?;
             Ok(Value::Bool(node.forget(&id).map_err(|e| e.to_string())?))
@@ -616,6 +645,7 @@ fn phone_files() -> Result<&'static crate::phone_files::PhoneFiles, String> {
     crate::phone_files::FILES.get().ok_or_else(|| "not ready yet".to_string())
 }
 
+#[cfg(target_os = "linux")]
 fn terminals() -> Result<&'static crate::terminal::Terminals, String> {
     crate::terminal::TERMINALS.get().ok_or_else(|| "terminals aren't available here".to_string())
 }
@@ -625,6 +655,7 @@ fn gallery() -> Result<&'static crate::gallery::Gallery, String> {
 }
 
 /// The decks, once they know what this computer can do.
+#[cfg(target_os = "linux")]
 async fn deck() -> Result<&'static crate::deck::Deck, String> {
     let deck = crate::deck::DECK.get().ok_or_else(|| "decks aren't available here".to_string())?;
     deck.ready().await;

@@ -3,7 +3,6 @@
 //! entries) both find no socket yet, and only one gets the lock.
 
 use std::fs::File;
-use std::os::fd::AsRawFd;
 use std::path::Path;
 
 /// Another service holds the lock.
@@ -15,10 +14,22 @@ pub struct Taken;
 /// then starts as it always did, with only the socket to tell it from another.
 pub fn take(socket: &Path) -> Result<Option<File>, Taken> {
     let path = socket.with_extension("lock");
+    // Windows: the socket is a named pipe, not a file; the lock goes in the runtime folder
+    #[cfg(windows)]
+    let path = match (socket.to_string_lossy().starts_with(r"\\"), linksy_ipc::runtime_dir(), path.file_name()) {
+        (true, Some(dir), Some(name)) => dir.join(name),
+        _ => path,
+    };
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let Ok(file) = File::options().create(true).truncate(false).write(true).open(&path) else { return Ok(None) };
+    lock(&path)
+}
+
+#[cfg(unix)]
+fn lock(path: &Path) -> Result<Option<File>, Taken> {
+    use std::os::fd::AsRawFd;
+    let Ok(file) = File::options().create(true).truncate(false).write(true).open(path) else { return Ok(None) };
     // SAFETY: the descriptor is open for as long as `file` is
     if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
         return Ok(Some(file));
@@ -26,6 +37,19 @@ pub fn take(socket: &Path) -> Result<Option<File>, Taken> {
     match std::io::Error::last_os_error().raw_os_error() {
         Some(libc::EWOULDBLOCK) => Err(Taken),
         _ => Ok(None),
+    }
+}
+
+/// Windows: the file opened with no sharing at all; a second open fails until the first
+/// service's handle closes (however it ends).
+#[cfg(windows)]
+fn lock(path: &Path) -> Result<Option<File>, Taken> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const ERROR_SHARING_VIOLATION: i32 = 32;
+    match File::options().create(true).truncate(false).write(true).share_mode(0).open(path) {
+        Ok(file) => Ok(Some(file)),
+        Err(e) if e.raw_os_error() == Some(ERROR_SHARING_VIOLATION) => Err(Taken),
+        Err(_) => Ok(None),
     }
 }
 
@@ -52,6 +76,7 @@ mod tests {
         assert!(a.is_some() && b.is_some());
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_folder_that_cannot_be_written_to_does_not_stop_the_service() {
         assert!(take(Path::new("/proc/linksy/linksyd.sock")).unwrap().is_none());

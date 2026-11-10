@@ -4,6 +4,11 @@
 //! copy of itself that starts it again, with the unit file's rules: after 3 s, for a crash or
 //! a kill, never for a stop that was asked for, and not forever (5 times in a minute).
 
+//!
+//! Windows has no parent-death signal, so there the service runs on its own (the tray app or
+//! the logon task starts it); this module only exists on Unix.
+#![cfg(unix)]
+
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::{Child, Command, ExitCode, ExitStatus};
 use std::time::{Duration, Instant};

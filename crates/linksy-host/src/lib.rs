@@ -3,6 +3,7 @@
 //! `flatpak-spawn --host`, and files in the home folder are read and written by them.
 //! Elsewhere everything simply runs here.
 
+#[cfg(unix)]
 pub mod pkexec;
 
 use std::ffi::OsStr;
@@ -95,7 +96,9 @@ pub fn exists(path: &Path) -> bool {
 /// Whether `program` is installed on the computer (in its PATH).
 pub fn installed(program: &str) -> bool {
     if !flatpak() {
-        return std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(program).is_file()));
+        // Windows programs end in .exe, which their callers leave out
+        let names = [program.to_string(), format!("{program}{}", std::env::consts::EXE_SUFFIX)];
+        return std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| names.iter().any(|n| d.join(n).is_file())));
     }
     quiet(command("sh", &[]).args(["-c", "command -v \"$1\"", "sh", program]))
 }

@@ -31,11 +31,27 @@ image = { version = "0.25.10", default-features = false, features = ["png", "jpe
 ksni = { version = "0.3.7", default-features = false, features = ["async-io"] }
 if-addrs = "0.15.0"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Power", "Win32_System_Registry", "Win32_System_Shutdown", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+if-addrs = "0.15.0"
+# The tray icon and its menu; the file dialog for Send Files; the QR code for pairing
+tray-icon = "0.21.3"
+rfd = "0.15.4"
+qrcode = { version = "0.14.1", default-features = false }
+# Toast notifications, with buttons
+tauri-winrt-notification = "0.8.1"
+# The clipboard: text, pictures and files
+clipboard-win = "5.4.1"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "bmp", "gif", "webp"] }
+
 [features]
 default = ["away"]
 # `--no-default-features`: a service with no relay code, that never reaches past the local
 # network and the cable (ROADMAP 0.14)
 away = ["linksy-core/away"]
+
+[build-dependencies]
+winresource = "0.1.20"
 
 [dev-dependencies]
 tempfile = "3.27.0"

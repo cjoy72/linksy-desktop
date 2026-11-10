@@ -14,8 +14,12 @@ const LINES: &str = "3000";
 /// The programs whose log is gathered (the journal's `_COMM`).
 const PROGRAMS: [&str; 4] = ["linksyd", "linksy-app", "linksy-qt", "linksy-screen"];
 
-/// Where crash files go: `~/.local/state/linksy/crashes`.
+/// Where crash files go: `~/.local/state/linksy/crashes` (Windows: `%LOCALAPPDATA%\Linksy\crashes`).
 pub fn crash_dir() -> PathBuf {
+    #[cfg(windows)]
+    if let Some(local) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).filter(|p| p.is_absolute()) {
+        return local.join("Linksy").join("crashes");
+    }
     let state = std::env::var_os("XDG_STATE_HOME").map(PathBuf::from).filter(|p| p.is_absolute());
     let state = state.unwrap_or_else(|| home().join(".local/state"));
     state.join("linksy/crashes")
@@ -70,7 +74,7 @@ pub fn open_service_log() -> std::io::Result<std::fs::File> {
 }
 
 fn home() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default()
+    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from).unwrap_or_default()
 }
 
 fn now() -> u64 {
@@ -189,7 +193,7 @@ fn redact(text: &str) -> String {
     if let Some(home) = home.to_str().filter(|h| h.len() > 1) {
         text = text.replace(home, "~");
     }
-    if let Ok(user) = std::env::var("USER")
+    if let Ok(user) = std::env::var(if cfg!(windows) { "USERNAME" } else { "USER" })
         && user.len() > 2
     {
         text = text.replace(&user, "user");

@@ -275,7 +275,9 @@ impl Op {
                 if item.entry.dir {
                     tokio::fs::create_dir_all(&dest).await.map_err(|e| Fail::Local(dest, e))?;
                 } else {
-                    let label = format!("{label}/{}", item.rel.to_string_lossy());
+                    // With `/` on every system, as the history and the apps show paths
+                    let rel: Vec<_> = item.rel.iter().map(|c| c.to_string_lossy()).collect();
+                    let label = format!("{label}/{}", rel.join("/"));
                     self.fetch(&item.path, &item.entry, &dest, Some(label)).await?;
                 }
             }
@@ -849,7 +851,8 @@ mod tests {
         let mut folders = vec![dir.to_path_buf()];
         while let Some(d) = folders.pop() {
             for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
-                let rel = e.path().strip_prefix(dir).unwrap().to_string_lossy().into_owned();
+                // As the phone writes them, whatever this system's separator
+                let rel = e.path().strip_prefix(dir).unwrap().to_string_lossy().replace('\\', "/");
                 if e.path().is_dir() {
                     folders.push(e.path());
                     out.push(format!("{rel}/"));

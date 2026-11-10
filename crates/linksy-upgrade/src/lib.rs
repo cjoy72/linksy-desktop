@@ -177,6 +177,10 @@ pub fn check() -> Result<Option<Plan>, String> {
 
 /// Why this install can't upgrade itself, and what to do instead; None when it can.
 pub fn manual(plan: &Plan) -> Option<String> {
+    // The Windows build (a fork of Linksy) has no installer to upgrade through yet
+    if cfg!(windows) {
+        return Some(t!("Linksy {version} is out. This Windows build updates by hand: build or download the newest one.", version = plan.latest));
+    }
     match plan.method {
         Method::Arch => Some(t!("Rebuild the Linksy package from its PKGBUILD for {version}.", version = plan.latest)),
         Method::Other => Some(t!("This Linksy wasn't installed from a package. Install {version} with: curl -fsSL https://linksy.diary.mg/install.sh | sh", version = plan.latest)),
@@ -188,6 +192,7 @@ pub fn manual(plan: &Plan) -> Option<String> {
 /// the app's own prompt where no polkit agent runs).
 pub enum Root {
     Sudo,
+    #[cfg(unix)]
     Pkexec(linksy_host::pkexec::Ask),
 }
 
@@ -287,6 +292,7 @@ fn install_packages(paths: &[PathBuf], root: Root) -> Result<(), String> {
     let (cmd, mut argv) = match root {
         Root::Sudo if nix_root() => (script.display().to_string(), Vec::new()),
         Root::Sudo => ("sudo".to_string(), vec![script.display().to_string()]),
+        #[cfg(unix)]
         Root::Pkexec(ask) => {
             let argv: Vec<std::ffi::OsString> = std::iter::once(script.into_os_string()).chain(args.into_iter().map(Into::into)).collect();
             let outcome = linksy_host::pkexec::run(&argv, ask, |_| {}).map_err(|e| e.to_string())?;

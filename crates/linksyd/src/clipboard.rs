@@ -6,11 +6,24 @@
 //! goes to them. That needs `wl-paste --watch`, which only works where the compositor has
 //! the data-control protocol (KDE, wlroots), not on GNOME.
 
+//!
+//! Windows has a clipboard every program may read, set and watch: see `win`.
+
 use std::collections::HashSet;
+#[cfg(not(windows))]
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
+#[cfg(not(windows))]
 use std::process::{Command, Stdio};
+#[cfg(not(windows))]
 use std::time::{Duration, Instant};
+
+#[cfg(windows)]
+mod win;
+#[cfg(windows)]
+pub(crate) use win::{can_paste, copy_text, read_local};
+#[cfg(windows)]
+use win::{copy_file, probe_watch, watch};
 
 use linksy_core::{Event, Fingerprint, Node};
 use linksy_i18n::t;
@@ -102,6 +115,7 @@ pub fn can_watch() -> bool {
     *CAN.get_or_init(probe_watch)
 }
 
+#[cfg(not(windows))]
 fn probe_watch() -> bool {
     if std::env::var_os("WAYLAND_DISPLAY").is_none() {
         // X11: read with xclip or xsel now and then
@@ -124,12 +138,14 @@ fn probe_watch() -> bool {
     true
 }
 
+#[cfg(not(windows))]
 /// The command that prints X11's clipboard.
 fn x11_reader() -> Option<&'static [&'static str]> {
     let tools: [&'static [&'static str]; 2] = [&["xclip", "-o", "-selection", "clipboard"], &["xsel", "--clipboard", "--output"]];
     tools.into_iter().find(|t| linksy_host::installed(t[0]))
 }
 
+#[cfg(not(windows))]
 /// A clipboard tool: wl-clipboard comes with the Flatpak, xclip and xsel are the computer's.
 fn tool(program: &str) -> Command {
     if program.starts_with("wl-") { Command::new(program) } else { linksy_host::command(program, &[]) }
@@ -137,10 +153,12 @@ fn tool(program: &str) -> Command {
 
 /// A tool that puts something on the clipboard: on X11 it stays in the background to hand
 /// it over, so nothing may end it with Linksy.
+#[cfg(not(windows))]
 fn copier(program: &str) -> Command {
     if program.starts_with("wl-") { Command::new(program) } else { linksy_host::detached(program, &[]) }
 }
 
+#[cfg(not(windows))]
 /// The tools that put things on this session's clipboard and are installed, in the order
 /// to try (from the Flatpak, starting one always works, so it's checked first).
 fn copiers<'a>(wayland: &'a [(&'a str, &'a [&'a str])], x11: &'a [(&'a str, &'a [&'a str])]) -> Vec<&'a (&'a str, &'a [&'a str])> {
@@ -150,6 +168,7 @@ fn copiers<'a>(wayland: &'a [(&'a str, &'a [&'a str])], x11: &'a [(&'a str, &'a 
     x11.iter().filter(|(cmd, _)| linksy_host::installed(cmd)).collect()
 }
 
+#[cfg(not(windows))]
 /// Every new text on X11's clipboard: read when the X server says it has a new owner
 /// (XFixes), or once a second without that extension.
 fn watch_x11() -> Option<mpsc::UnboundedReceiver<String>> {
@@ -188,6 +207,7 @@ fn watch_x11() -> Option<mpsc::UnboundedReceiver<String>> {
     Some(rx)
 }
 
+#[cfg(not(windows))]
 /// A connection to the X server that gets an event each time the clipboard changes owner.
 fn x11_owner_changes() -> Result<x11rb::rust_connection::RustConnection, String> {
     use x11rb::connection::Connection;
@@ -203,6 +223,7 @@ fn x11_owner_changes() -> Result<x11rb::rust_connection::RustConnection, String>
     Ok(conn)
 }
 
+#[cfg(not(windows))]
 /// Every new text on the clipboard, from `wl-paste --watch` (X11: [`watch_x11`]). None
 /// where it can't watch.
 fn watch() -> Option<mpsc::UnboundedReceiver<String>> {
@@ -248,6 +269,7 @@ pub enum Copied {
     Png(Vec<u8>),
 }
 
+#[cfg(not(windows))]
 /// Reads the clipboard once, as the app's Send Clipboard does. `wl-paste` can do that even
 /// on GNOME, where it can't watch; X11 through xclip.
 pub fn read_local() -> Option<Copied> {
@@ -267,6 +289,7 @@ pub fn read_local() -> Option<Copied> {
     (!text.is_empty()).then_some(Copied::Text(text))
 }
 
+#[cfg(not(windows))]
 /// Whether X11 or Wayland has the tool [`paste`] reads with.
 pub fn can_paste() -> bool {
     if std::env::var_os("WAYLAND_DISPLAY").is_none() {
@@ -275,6 +298,7 @@ pub fn can_paste() -> bool {
     std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("wl-paste").is_file()))
 }
 
+#[cfg(not(windows))]
 /// The clipboard as `mime` ("text" for any text), or the types it has.
 fn paste(mime: Option<&str>) -> Option<Vec<u8>> {
     let mut cmd = if std::env::var_os("WAYLAND_DISPLAY").is_some() {
@@ -333,6 +357,7 @@ fn announce(from: &str, text: &str, copied: bool) {
     }
 }
 
+#[cfg(not(windows))]
 pub(crate) fn copy_text(text: &str) -> std::io::Result<()> {
     let tools = copiers(&[("wl-copy", &[])], &[("xclip", &["-selection", "clipboard"]), ("xsel", &["--clipboard", "--input"])]);
     let mut last = std::io::Error::new(std::io::ErrorKind::NotFound, "no clipboard tool (wl-copy, xclip or xsel)");
@@ -352,6 +377,7 @@ pub(crate) fn copy_text(text: &str) -> std::io::Result<()> {
     Err(last)
 }
 
+#[cfg(not(windows))]
 /// An image goes on the clipboard as one, so it pastes into a chat or editor; anything else
 /// as a file, so it pastes into the file manager.
 fn copy_file(path: &Path) -> std::io::Result<()> {
@@ -361,6 +387,7 @@ fn copy_file(path: &Path) -> std::io::Result<()> {
     }
 }
 
+#[cfg(not(windows))]
 fn copy_as(mime: &str, data: &[u8]) -> std::io::Result<()> {
     let (wl, xc) = (["--type", mime], ["-selection", "clipboard", "-t", mime]);
     let (wayland, x11) = ([("wl-copy", &wl[..])], [("xclip", &xc[..])]);
@@ -398,6 +425,7 @@ fn file_name(path: &Path) -> String {
     path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
+#[cfg(not(windows))]
 /// `file://` URI with everything but unreserved characters and `/` percent-encoded.
 fn file_uri(path: &Path) -> String {
     use std::os::unix::ffi::OsStrExt;
@@ -416,6 +444,7 @@ fn file_uri(path: &Path) -> String {
 mod tests {
     use super::*;
 
+    #[cfg(not(windows))]
     #[test]
     fn file_uris_are_encoded() {
         assert_eq!(file_uri(Path::new("/home/a/My File#1.pdf")), "file:///home/a/My%20File%231.pdf");

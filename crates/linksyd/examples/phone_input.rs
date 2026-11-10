@@ -6,15 +6,26 @@
 //! X and Y are fractions of the screen (0.5 0.5 is the middle). With no option it taps the
 //! middle, then types "hello".
 
+#[cfg(target_os = "linux")]
 #[path = "../src/usb_hid.rs"]
 #[allow(dead_code)]
 mod usb_hid;
 
+#[cfg(target_os = "linux")]
 use std::time::Duration;
 
+#[cfg(target_os = "linux")]
 use linksy_core::{ControlMsg, MouseButton};
+#[cfg(target_os = "linux")]
 use nusb::transfer::{ControlIn, ControlType, Recipient};
 
+/// The cable's virtual devices are Linux's only so far.
+#[cfg(not(target_os = "linux"))]
+fn main() {
+    eprintln!("phone_input works on Linux only");
+}
+
+#[cfg(target_os = "linux")]
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();

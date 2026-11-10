@@ -1,5 +1,6 @@
 //! "Open on PC": web links a paired device shares open in this computer's browser.
 
+#[cfg(not(windows))]
 use std::process::{Command, Stdio};
 
 use linksy_core::{Event, Node};
@@ -15,7 +16,16 @@ pub async fn run(node: Node) {
             Err(RecvError::Closed) => break,
         };
         // The core only lets http(s) links through, so this never opens a file or a program.
+        #[cfg(windows)]
+        {
+            match crate::system::open(std::ffi::OsStr::new(&url)) {
+                Ok(()) => info!("opening a link from {from}"),
+                Err(e) => warn!("could not open a link from {from}: {e}"),
+            }
+            continue;
+        }
         // In a Flatpak, xdg-open hands the link to the OpenURI portal.
+        #[cfg(not(windows))]
         match Command::new("xdg-open").arg(&url).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
             Ok(mut child) => {
                 info!("opening a link from {from}");

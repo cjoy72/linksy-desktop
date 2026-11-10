@@ -8,4 +8,7 @@ license.workspace = true
 linksy-core = { path = "../linksy-core", default-features = false }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-tokio = { version = "1.53.3", features = ["net", "io-util", "sync", "rt", "macros"] }
+tokio = { version = "1.53.3", features = ["net", "io-util", "sync", "rt", "macros", "time"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization"] }

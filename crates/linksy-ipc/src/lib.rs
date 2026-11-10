@@ -17,11 +17,11 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
-use tokio::net::unix::OwnedWriteHalf;
 use tokio::sync::{broadcast, oneshot};
 
 pub use linksy_core;
+
+pub mod local;
 
 /// Devices are addressed by full id, short id ("A1B2-C3D4") or name; `pair` also takes
 /// an `ip:port` address.
@@ -648,12 +648,21 @@ pub enum ServerMsg {
 
 /// Where Linksy's sockets live: `$XDG_RUNTIME_DIR`, or in a Flatpak, the app's own folder
 /// in it, the one place every sandbox of the app shares.
+#[cfg(not(windows))]
 pub fn runtime_dir() -> Option<PathBuf> {
     let dir = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR")?);
     Some(match std::env::var_os("FLATPAK_ID") {
         Some(id) => dir.join("app").join(id),
         None => dir,
     })
+}
+
+/// Windows: a folder of this user's own, in the local app data.
+#[cfg(windows)]
+pub fn runtime_dir() -> Option<PathBuf> {
+    let dir = PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("Linksy").join("run");
+    let _ = std::fs::create_dir_all(&dir);
+    Some(dir)
 }
 
 /// `$LINKSY_SOCKET`, else `linksyd.sock` in the [`runtime_dir`].
@@ -670,6 +679,14 @@ pub fn custom_socket() -> bool {
     std::env::var_os("LINKSY_SOCKET").is_some_and(|p| *p != *usual_socket_path())
 }
 
+/// Windows: a named pipe per user (only that user may open it; see `local`).
+#[cfg(windows)]
+fn usual_socket_path() -> PathBuf {
+    let user = std::env::var("USERNAME").unwrap_or_else(|_| "user".into());
+    PathBuf::from(format!(r"\\.\pipe\linksyd-{user}"))
+}
+
+#[cfg(not(windows))]
 fn usual_socket_path() -> PathBuf {
     match runtime_dir() {
         Some(dir) => dir.join("linksyd.sock"),
@@ -704,7 +721,7 @@ impl std::error::Error for ClientError {}
 type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>;
 
 pub struct Client {
-    writer: tokio::sync::Mutex<OwnedWriteHalf>,
+    writer: tokio::sync::Mutex<local::WriteHalf>,
     pending: Pending,
     next: AtomicU64,
     events: broadcast::Sender<Event>,
@@ -720,7 +737,7 @@ impl Client {
     }
 
     pub async fn connect_to(path: &Path) -> io::Result<Self> {
-        let (read, write) = UnixStream::connect(path).await?.into_split();
+        let (read, write) = local::split(local::connect(path).await?);
         let pending: Pending = Arc::default();
         let (events, _) = broadcast::channel(512);
         let (history, _) = broadcast::channel(128);
@@ -1178,11 +1195,11 @@ mod tests {
         use tokio::io::AsyncWriteExt;
         let dir = std::env::temp_dir().join(format!("linksy-ipc-quit-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("s.sock");
-        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        let path = dir.join(format!("linksy-quit-{}.sock", std::process::id()));
+        let mut listener = local::Listener::bind(&path).unwrap();
         let client = Client::connect_to(&path).await.unwrap();
         let mut quitting = client.quitting();
-        let (mut server, _) = listener.accept().await.unwrap();
+        let mut server = listener.accept().await.unwrap();
         server.write_all(b"{\"quitting\":true}\n").await.unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(2), quitting.recv()).await.expect("the notice arrives").unwrap();
         let _ = std::fs::remove_dir_all(&dir);

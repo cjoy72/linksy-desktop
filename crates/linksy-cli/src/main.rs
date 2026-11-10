@@ -516,10 +516,9 @@ async fn run(c: &Client, cmd: &str, rest: &[String]) -> Result<(), String> {
             };
             // Stopped by Ctrl+C or by a SIGTERM: either way, end the session first.
             // I hope this doesn't break. It hasn't yet.
-            let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).map_err(|e| e.to_string())?;
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => {}
-                _ = term.recv() => {}
+                _ = terminated() => {}
                 _ = ended => println!("{to} stopped."),
             }
             let _ = c.end_session(info.session).await;
@@ -533,7 +532,7 @@ async fn run(c: &Client, cmd: &str, rest: &[String]) -> Result<(), String> {
             println!("Asking {to} to share its screen…");
             let info = c.start_session(to.clone(), linksy_ipc::linksy_core::SessionKind::Screen).await.map_err(err)?;
             let socket = info.socket.ok_or("no stream to record")?;
-            let mut stream = tokio::net::UnixStream::connect(&socket).await.map_err(|e| e.to_string())?;
+            let mut stream = linksy_ipc::local::connect(&socket).await.map_err(|e| e.to_string())?;
             let mut out = tokio::fs::File::create(file).await.map_err(|e| format!("{file}: {e}"))?;
             println!("Recording for {seconds} s…");
             let copied = tokio::time::timeout(std::time::Duration::from_secs(seconds), tokio::io::copy(&mut stream, &mut out)).await;
@@ -588,6 +587,33 @@ async fn run(c: &Client, cmd: &str, rest: &[String]) -> Result<(), String> {
         _ => return Err("Unknown command. Run `linksy help`.".to_string()),
     }
     Ok(())
+}
+
+/// Asked to stop by the system: SIGTERM on Linux; on Windows, the console closing or the
+/// user logging off or shutting down.
+async fn terminated() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::terminate()) {
+            Ok(mut term) => {
+                term.recv().await;
+            }
+            Err(_) => std::future::pending().await,
+        }
+    }
+    #[cfg(windows)]
+    {
+        use tokio::signal::windows::{ctrl_close, ctrl_logoff, ctrl_shutdown};
+        match (ctrl_close(), ctrl_logoff(), ctrl_shutdown()) {
+            (Ok(mut close), Ok(mut logoff), Ok(mut shutdown)) => tokio::select! {
+                _ = close.recv() => {}
+                _ = logoff.recv() => {}
+                _ = shutdown.recv() => {}
+            },
+            _ => std::future::pending().await,
+        }
+    }
 }
 
 async fn watch(c: &Client) -> Result<(), String> {

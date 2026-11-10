@@ -9,9 +9,13 @@ use std::time::{Duration, Instant};
 
 use linksy_core::{CallState, Direction, Event, Fingerprint, Node, SessionKind, Uuid};
 use linksy_i18n::t;
+#[cfg(not(windows))]
 use notify_rust::{Hint, Notification, Timeout, Urgency};
 use tokio::sync::broadcast::error::RecvError;
 use tracing::debug;
+
+#[cfg(windows)]
+pub(crate) mod win;
 
 const APP: &str = "Linksy";
 pub(crate) const DESKTOP_ENTRY: &str = "mg.diary.linksy.Linksy";
@@ -54,6 +58,12 @@ fn pairing_over(device: Fingerprint) {
     }
 }
 
+/// Windows: an answered prompt stays in the notification center, where its buttons no longer
+/// do anything (the request is gone).
+#[cfg(windows)]
+async fn close(_id: u32) {}
+
+#[cfg(not(windows))]
 async fn close(id: u32) {
     let Ok(bus) = zbus::Connection::session().await else { return };
     let closed = bus
@@ -187,6 +197,9 @@ pub async fn run(node: Node) {
                     Some(c) => t!("Call from {contact}", contact = c),
                     None => t!("Incoming call").to_string(),
                 };
+                #[cfg(windows)]
+                show(summary, t!("On {device}", device = from.name));
+                #[cfg(not(windows))]
                 tokio::task::spawn_blocking(move || {
                     let mut n = base(&summary, &t!("On {device}", device = from.name));
                     n.hint(Hint::Transient(true)).timeout(Timeout::Milliseconds(20_000));
@@ -196,6 +209,9 @@ pub async fn run(node: Node) {
                 });
             }
             Event::Ring { from, on: true } => {
+                #[cfg(windows)]
+                show(t!("{device} is looking for this computer", device = from.name), t!("Here it is!").into());
+                #[cfg(not(windows))]
                 tokio::task::spawn_blocking(move || {
                     let mut n = base(&t!("{device} is looking for this computer", device = from.name), t!("Here it is!"));
                     n.urgency(Urgency::Critical).hint(Hint::SoundName("phone-incoming-call".into()));
@@ -231,6 +247,7 @@ fn with_sender(body: &str, device: &str, from: String) -> String {
     }
 }
 
+#[cfg(not(windows))]
 pub fn base(summary: &str, body: &str) -> Notification {
     let mut n = Notification::new();
     n.appname(APP).summary(summary).body(body).icon(DESKTOP_ENTRY).hint(Hint::DesktopEntry(DESKTOP_ENTRY.into()));
@@ -239,9 +256,65 @@ pub fn base(summary: &str, body: &str) -> Notification {
 
 pub(crate) fn show(summary: String, body: String) {
     tokio::task::spawn_blocking(move || {
+        #[cfg(windows)]
+        win::show(&summary, &body);
+        #[cfg(not(windows))]
         if let Err(e) = base(&summary, &body).show() {
             debug!("notification failed: {e}");
         }
+    });
+}
+
+/// What a prompt's button does, here or on Linux.
+fn act(node: &Node, request: Uuid, always: Option<Always>, action: &str) {
+    let forget = || PROMPTS.lock().unwrap().as_mut().map(|p| p.remove(&request));
+    match action {
+        "accept" => {
+            forget();
+            node.respond(request, true);
+        }
+        "always" => {
+            forget();
+            let set = match always {
+                Some(Always::Files(id)) => node.set_auto_accept(&id, true),
+                Some(Always::Screen(id)) => node.set_allow_screen(&id, true),
+                None => Ok(()),
+            };
+            if let Err(e) = set {
+                debug!("always failed: {e}");
+            }
+            node.respond(request, true);
+        }
+        "decline" => {
+            forget();
+            node.respond(request, false);
+        }
+        // Clicking the body or dismissing leaves the decision to the app.
+        _ => {}
+    }
+}
+
+/// Windows: a toast with Accept/Decline that stays until it's answered.
+#[cfg(windows)]
+fn prompt(node: Node, request: Uuid, pairing: Option<Fingerprint>, always: Option<Always>, summary: String, body: String, accept_label: &'static str) {
+    tokio::task::spawn_blocking(move || {
+        let always_label = match always {
+            Some(Always::Files(_)) => Some(t!("Always Accept")),
+            Some(Always::Screen(_)) => Some(t!("Always Allow")),
+            None => None,
+        };
+        let mut buttons = vec![(accept_label, "accept")];
+        if let Some(label) = always_label {
+            buttons.push((label, "always"));
+        }
+        buttons.push((t!("Decline"), "decline"));
+        PROMPTS.lock().unwrap().get_or_insert_default().insert(request, (0, pairing));
+        let answer = node.clone();
+        match win::prompt(&summary, &body, &buttons, true, move |action| act(&answer, request, always, action)) {
+            Ok(()) => {}
+            Err(e) => debug!("notification failed: {e}"),
+        }
+        let _ = node;
     });
 }
 
@@ -249,6 +322,7 @@ pub(crate) fn show(summary: String, body: String) {
 /// answered (critical, no timeout), and goes when it is: clicking a button closes it (it
 /// isn't resident), and an answer from the app or the other device closes it too.
 /// `always`: what the prompt can also allow from now on.
+#[cfg(not(windows))]
 fn prompt(node: Node, request: Uuid, pairing: Option<Fingerprint>, always: Option<Always>, summary: String, body: String, accept_label: &'static str) {
     tokio::task::spawn_blocking(move || {
         let mut n = base(&summary, &body);
@@ -266,31 +340,7 @@ fn prompt(node: Node, request: Uuid, pairing: Option<Fingerprint>, always: Optio
                 if !node.is_pending(request) {
                     answered(request);
                 }
-                let forget = || PROMPTS.lock().unwrap().as_mut().map(|p| p.remove(&request));
-                handle.wait_for_action(|action| match action {
-                    "accept" => {
-                        forget();
-                        node.respond(request, true);
-                    }
-                    "always" => {
-                        forget();
-                        let set = match always {
-                            Some(Always::Files(id)) => node.set_auto_accept(&id, true),
-                            Some(Always::Screen(id)) => node.set_allow_screen(&id, true),
-                            None => Ok(()),
-                        };
-                        if let Err(e) = set {
-                            debug!("always failed: {e}");
-                        }
-                        node.respond(request, true);
-                    }
-                    "decline" => {
-                        forget();
-                        node.respond(request, false);
-                    }
-                    // Clicking the body or dismissing leaves the decision to the app.
-                    _ => {}
-                })
+                handle.wait_for_action(|action| act(&node, request, always, action))
             }
             Err(e) => debug!("notification failed: {e}"),
         }
@@ -305,8 +355,18 @@ fn imported(from: String, saved: Vec<PathBuf>) {
     tokio::task::spawn_blocking(move || {
         let summary = if saved.len() == 1 { t!("Imported 1 photo from {device}", device = from) } else { t!("Imported {n} photos from {device}", n = saved.len(), device = from) };
         let folder = saved[0].parent().map(Path::to_path_buf).unwrap_or_default();
+        #[cfg(windows)]
+        {
+            let shown = folder.clone();
+            if let Err(e) = win::prompt(&summary, &folder.display().to_string(), &[(t!("Show Photos"), "default")], false, move |_| win::open(&shown)) {
+                debug!("notification failed: {e}");
+            }
+        }
+        #[cfg(not(windows))]
         let mut n = base(&summary, &folder.display().to_string());
+        #[cfg(not(windows))]
         n.action("default", t!("Show Photos"));
+        #[cfg(not(windows))]
         match n.show() {
             Ok(handle) => handle.wait_for_action(|action| {
                 if action == "default" {
@@ -327,8 +387,23 @@ fn received(from: String, saved: Vec<PathBuf>) {
                 many.first().and_then(|p| p.parent()).map(Path::to_path_buf).unwrap_or_default(),
             ),
         };
+        #[cfg(windows)]
+        {
+            let buttons = [(t!("Open"), "default"), (t!("Show in Folder"), "show")];
+            let opened = move |action: &str| match action {
+                "show" if saved.len() == 1 => win::reveal(&target),
+                "show" => win::open(&target),
+                _ => win::open(&target),
+            };
+            if let Err(e) = win::prompt(&summary, &t!("From {device}", device = from), &buttons, false, opened) {
+                debug!("notification failed: {e}");
+            }
+        }
+        #[cfg(not(windows))]
         let mut n = base(&summary, &t!("From {device}", device = from));
+        #[cfg(not(windows))]
         n.action("default", t!("Open")).action("show", t!("Show in Folder"));
+        #[cfg(not(windows))]
         match n.show() {
             Ok(handle) => handle.wait_for_action(|action| {
                 let path = match action {
