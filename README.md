@@ -186,17 +186,30 @@ the cable), build the service with `cargo build --release -p linksyd --no-defaul
 
 ### macOS
 
-This fork runs the service and the command line on a Mac (Apple silicon or Intel, macOS 13
-or newer). There's no window yet: the phone's app is the window, and `linksy` in a terminal
-is the computer's side. With Rust and Xcode's command line tools (`xcode-select --install`)
-installed:
+This fork runs the service, the command line and a menu bar app on a Mac (Apple silicon or
+Intel, macOS 13 or newer). With Rust and Xcode's command line tools
+(`xcode-select --install`) installed:
 
 ```sh
-scripts/install-macos.sh   # builds, installs to ~/.local/bin, starts the service at login
+scripts/install-macos.sh   # builds, installs to ~/.local/bin and ~/Applications, starts at login
 linksy devices
 linksy pair "Pixel 9"        # or `linksy invite` for a QR code the phone scans
-linksy watch                 # follow activity and answer requests
+linksy watch                 # follow activity and answer requests in the terminal
 ```
+
+**The menu bar app** (`Linksy.app`, from `crates/linksy-mac`) is the Mac's counterpart of
+the Linux tray: a phone icon that shows whether the service runs and how many devices are
+connected. Its menu lists each paired device with Send Files (a file dialog), Send Clipboard
+(text, a copied image or copied files) and Ring; what a phone asks for appears at the top
+with Accept and Decline (pairing, with the code both screens show; files; a session), and
+the menu opens by itself when something new arrives; Pair a Device shows a QR code for the
+phone's Linksy to scan; Quit leaves the service running (hold Option to stop it too, until
+the next login). It's written in Swift against AppKit and built by
+`cargo build --release -p linksy-mac` with the system's `swiftc`, no Xcode project and no
+Homebrew: the crate's build script writes `target/release/Linksy.app`. The install script
+copies it to `~/Applications` and registers it as a login item
+(`Linksy.app/Contents/MacOS/linksy-mac --login-item`, or `--no-login-item` to stop);
+`scripts/install-macos.sh --no-app` leaves it out.
 
 What works on a Mac: pairing (on the same Wi-Fi, or away from home through the relay),
 files and folders both ways, the clipboard both ways (text, images and files; automatic
@@ -210,9 +223,10 @@ aren't offered to phones from a Mac.
 
 The service is a launchd agent (`~/Library/LaunchAgents/mg.diary.linksy.linksyd.plist`,
 log in `~/.local/state/linksy/linksyd.log`); `launchctl kickstart -k gui/$(id -u)/mg.diary.linksy.linksyd`
-restarts it, `scripts/uninstall-macos.sh` removes it. The first time a phone connects,
-macOS asks whether `linksyd` may accept incoming connections: allow it. `linksy upgrade`
-doesn't apply: pull the repository and run the install script again.
+restarts it (the menu bar app offers Start the Service while it's down), and
+`scripts/uninstall-macos.sh` removes everything. The first time a phone connects, macOS asks
+whether `linksyd` may accept incoming connections: allow it. `linksy upgrade` doesn't apply:
+pull the repository and run the install script again.
 
 The GTK app and the screen helper need GTK ≥ 4.14, libadwaita ≥ 1.5 and GStreamer ≥ 1.22
 headers:
@@ -281,6 +295,7 @@ Screenshots are in `docs/screenshots/`.
 | `crates/linksy-cli` | `linksy`, the command-line front end. |
 | `crates/linksy-gtk` | `linksy-app`, the GTK4/libadwaita app for Linux. |
 | `crates/linksy-qt` | `linksy-qt`, the Qt 6/Kirigami app for KDE Plasma. |
+| `crates/linksy-mac` | `Linksy.app`, the menu bar app for macOS (Swift, built with `swiftc` by the crate's build script). |
 | `crates/linksy-screen` | Screens, cameras and microphones, started only while sharing: capture and H.264 encoding (GStreamer: the ScreenCast portal, or the X display on X11), and input (the RemoteDesktop portal, XTest on X11, the virtual pointer and keyboard on Hyprland and Sway). |
 | `crates/linksy-setup` | Finish Setup: what each feature needs, and adding it with one password. Shared by both apps. |
 | `crates/linksy-host` | Programs and files on the computer, from the Flatpak too, and pkexec with Linksy's own password prompt. |

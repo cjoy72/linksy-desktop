@@ -7,7 +7,13 @@ BIN="$HOME/.local/bin"
 LABEL="mg.diary.linksy.linksyd"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 DOMAIN="gui/$(id -u)"
+BUNDLE="$HOME/Applications/Linksy.app"
 
+if [ -x "$BUNDLE/Contents/MacOS/linksy-mac" ]; then
+  "$BUNDLE/Contents/MacOS/linksy-mac" --no-login-item 2>/dev/null || true
+fi
+pkill -x linksy-mac 2>/dev/null || true
+rm -rf "$BUNDLE"
 launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
 rm -f "$PLIST" "$BIN/linksyd" "$BIN/linksy"
 if [ "${1:-}" = "--purge" ]; then

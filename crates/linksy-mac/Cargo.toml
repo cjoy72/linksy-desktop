@@ -1,0 +1,10 @@
+[package]
+name = "linksy-mac"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Linksy's menu bar app for macOS: a Swift front end to linksyd, built by build.rs with swiftc"
+build = "build.rs"
+
+[lib]
+path = "src/lib.rs"

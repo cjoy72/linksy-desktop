@@ -2626,6 +2626,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "linksy-mac"
+version = "0.14.0"
+
+[[package]]
 name = "linksy-news"
 version = "0.14.0"
 dependencies = [

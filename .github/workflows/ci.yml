@@ -47,6 +47,8 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test -- --skip away_from_home_connects_and_keeps_screens_local
+      # The menu bar app: Swift, built by its build script with the runner's swiftc
+      - run: cargo build --release -p linksy-mac && plutil -lint target/release/Linksy.app/Contents/Info.plist
       - run: plutil -lint packaging/macos/mg.diary.linksy.linksyd.plist && bash -n scripts/install-macos.sh scripts/uninstall-macos.sh
 
   gtk:
