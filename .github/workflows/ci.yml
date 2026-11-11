@@ -33,6 +33,22 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
 
+  # The same, on a Mac: the service and the CLI through the system's own tools (mac.rs). The
+  # core's away-from-home test needs a route iroh can dial, which the runner may not have.
+  macos:
+    name: Core, service and CLI (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test -- --skip away_from_home_connects_and_keeps_screens_local
+      - run: plutil -lint packaging/macos/mg.diary.linksy.linksyd.plist && bash -n scripts/install-macos.sh scripts/uninstall-macos.sh
+
   gtk:
     name: GTK app and screen helper (Fedora)
     runs-on: ubuntu-latest
