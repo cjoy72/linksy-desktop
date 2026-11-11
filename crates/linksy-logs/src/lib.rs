@@ -134,16 +134,26 @@ pub fn unseen_crash() -> bool {
 /// journal), so call it off the main thread.
 pub fn collect(revision: &str) -> String {
     let mut out = String::from("Linksy logs\n===========\n\n");
-    let os = std::fs::read_to_string("/etc/os-release").ok().and_then(|s| {
-        s.lines().find_map(|l| l.strip_prefix("PRETTY_NAME=")).map(|v| v.trim_matches('"').to_string())
-    });
+    let os = std::fs::read_to_string("/etc/os-release")
+        .ok()
+        .and_then(|s| s.lines().find_map(|l| l.strip_prefix("PRETTY_NAME=")).map(|v| v.trim_matches('"').to_string()))
+        .or_else(|| run("sw_vers", &["-productVersion"]).map(|v| format!("macOS {}", v.trim())));
     let env = |k: &str| std::env::var(k).unwrap_or_else(|_| "unknown".into());
     let _ = writeln!(out, "Linksy:     {revision}");
     let _ = writeln!(out, "System:     {}", os.as_deref().unwrap_or("unknown"));
-    let _ = writeln!(out, "Kernel:     {}", std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default().trim());
+    let kernel = std::fs::read_to_string("/proc/sys/kernel/osrelease").ok().or_else(|| run("uname", &["-r"])).unwrap_or_default();
+    let _ = writeln!(out, "Kernel:     {}", kernel.trim());
     let _ = writeln!(out, "Desktop:    {} ({})", env("XDG_CURRENT_DESKTOP"), env("XDG_SESSION_TYPE"));
     let _ = writeln!(out, "GStreamer:  {}", run("gst-inspect-1.0", &["--version"]).and_then(|v| v.lines().find(|l| l.starts_with("GStreamer")).map(String::from)).unwrap_or_else(|| "not found".into()));
-    let _ = writeln!(out, "Service:    {}", run("systemctl", &["--user", "is-active", "linksyd"]).map(|s| s.trim().to_string()).unwrap_or_else(|| "unknown".into()));
+    let service = if cfg!(target_os = "macos") {
+        // launchd lists the agent while it's loaded; "state = running" while the service is up
+        let uid = run("id", &["-u"]).map(|u| u.trim().to_string()).unwrap_or_default();
+        run("launchctl", &["print", &format!("gui/{uid}/mg.diary.linksy.linksyd")])
+            .map(|s| if s.contains("state = running") { "active".to_string() } else { "loaded".to_string() })
+    } else {
+        run("systemctl", &["--user", "is-active", "linksyd"]).map(|s| s.trim().to_string())
+    };
+    let _ = writeln!(out, "Service:    {}", service.unwrap_or_else(|| "unknown".into()));
     let _ = writeln!(out, "Written at: {} (unix time)", now());
 
     let files = crashes(&crash_dir());

@@ -22,6 +22,7 @@ const PICK_TIMEOUT: Duration = Duration::from_secs(120);
 const VIEW_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long a driven phone may go without input before it's nudged awake: below Android's
 /// shortest screen timeout (15 s is the least most phones offer).
+#[cfg(target_os = "linux")]
 const KEEP_AWAKE: Duration = Duration::from_secs(10);
 
 #[derive(Clone)]
@@ -386,6 +387,7 @@ impl Sessions {
     /// A phone's screen to show here while this computer drives it over the cable: the
     /// video as usual, while the viewer's clicks and keys go to the phone's virtual
     /// touchscreen and keyboard (`usb_hid`), not to its app.
+    #[cfg(target_os = "linux")]
     pub fn view_driven(&self, session: Session, dev: nusb::Device, node: Node) -> std::io::Result<PathBuf> {
         let path = socket_path("view", session.id);
         let listener = bind(&path)?;
@@ -530,6 +532,7 @@ async fn relay(session: &mut Session, local: UnixStream) {
 
 /// The phone's video to the viewer, and the viewer's input to the phone's virtual devices.
 /// Text goes through the phone's clipboard and a paste, whatever its keyboard layout.
+#[cfg(target_os = "linux")]
 async fn drive(session: &mut Session, local: UnixStream, hid: crate::usb_hid::Hid, node: &Node) {
     use tokio::io::AsyncReadExt;
     let mut hid = Unplug(Some(hid));
@@ -611,8 +614,10 @@ async fn drive(session: &mut Session, local: UnixStream, hid: crate::usb_hid::Hi
 
 /// Unplugs a phone's virtual devices when driving stops, however it stops (an ended
 /// session aborts its task): a keyboard left plugged in would hide the phone's own.
+#[cfg(target_os = "linux")]
 struct Unplug(Option<crate::usb_hid::Hid>);
 
+#[cfg(target_os = "linux")]
 impl Drop for Unplug {
     fn drop(&mut self) {
         if let Some(hid) = self.0.take() {
@@ -661,7 +666,8 @@ pub(crate) async fn virtual_monitors() -> bool {
     if std::env::var_os("LINKSY_SCREEN_TEST").is_some() {
         return true;
     }
-    if x11() {
+    // Only the Linux desktop's portals and compositors make one
+    if !cfg!(target_os = "linux") || x11() {
         return false;
     }
     // Their portals can't (#42), but Linksy makes a headless output there itself
@@ -669,21 +675,26 @@ pub(crate) async fn virtual_monitors() -> bool {
     if ["hyprland", "sway"].iter().any(|d| desktop.contains(d)) {
         return Compositor::here().is_some();
     }
-    let Ok(bus) = zbus::Connection::session().await else { return true };
-    let reply = bus
-        .call_method(
-            Some("org.freedesktop.portal.Desktop"),
-            "/org/freedesktop/portal/desktop",
-            Some("org.freedesktop.DBus.Properties"),
-            "Get",
-            &("org.freedesktop.portal.ScreenCast", "AvailableSourceTypes"),
-        )
-        .await;
-    let Ok(reply) = reply else { return true };
-    match reply.body().deserialize::<zbus::zvariant::OwnedValue>().ok().and_then(|v| u32::try_from(v).ok()) {
-        Some(types) => types & 4 != 0,
-        None => true,
+    #[cfg(target_os = "linux")]
+    {
+        let Ok(bus) = zbus::Connection::session().await else { return true };
+        let reply = bus
+            .call_method(
+                Some("org.freedesktop.portal.Desktop"),
+                "/org/freedesktop/portal/desktop",
+                Some("org.freedesktop.DBus.Properties"),
+                "Get",
+                &("org.freedesktop.portal.ScreenCast", "AvailableSourceTypes"),
+            )
+            .await;
+        let Ok(reply) = reply else { return true };
+        match reply.body().deserialize::<zbus::zvariant::OwnedValue>().ok().and_then(|v| u32::try_from(v).ok()) {
+            Some(types) => types & 4 != 0,
+            None => true,
+        }
     }
+    #[cfg(not(target_os = "linux"))]
+    false
 }
 
 /// Why there's no second display here, for the app and the notification.

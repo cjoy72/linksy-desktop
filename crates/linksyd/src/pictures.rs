@@ -62,7 +62,12 @@ pub async fn run(node: Node, data_dir: PathBuf) {
 /// sandbox doesn't have those folders.
 fn own_picture() -> Option<String> {
     let user = std::env::var("USER").ok();
+    #[cfg(target_os = "macos")]
+    let candidates = crate::mac::account_picture().into_iter().chain(std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".face")));
+    #[cfg(not(target_os = "macos"))]
     let candidates = user.map(|u| PathBuf::from("/var/lib/AccountsService/icons").join(u)).into_iter().chain(std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".face")));
+    #[cfg(target_os = "macos")]
+    let _ = user;
     let bytes = candidates.filter_map(|p| linksy_host::read_bytes(&p, MAX_FILE)).filter(|b| is_image(b)).find_map(fit)?;
     Some(base64::engine::general_purpose::STANDARD.encode(bytes))
 }

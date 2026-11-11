@@ -143,6 +143,7 @@ fn network_of(ip: Ipv4Addr, prefix: u8) -> Ipv4Addr {
 }
 
 /// The interface of the default route with the lowest metric, from /proc/net/route.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn default_interface(route: &str) -> Option<String> {
     route
         .lines()
@@ -162,6 +163,7 @@ pub fn is_vpn(iface: &str) -> bool {
 }
 
 /// What /proc/net/arp says of an address: a complete entry answers, anything else doesn't.
+#[cfg(not(target_os = "macos"))]
 pub fn arp_of(table: &str, ip: Ipv4Addr) -> Arp {
     let entry = table.lines().skip(1).find_map(|l| {
         let f: Vec<&str> = l.split_whitespace().collect();
@@ -174,13 +176,51 @@ pub fn arp_of(table: &str, ip: Ipv4Addr) -> Arp {
 }
 
 /// Container and VM bridges: devices on them are never phones.
+#[cfg(not(target_os = "macos"))]
 const VIRTUAL: [&str; 10] = ["docker", "br-", "veth", "virbr", "lxc", "lxd", "podman", "cni", "vmnet", "vboxnet"];
+/// macOS: VPN tunnels, AirDrop's links, the VM bridges, the Thunderbolt bridge.
+#[cfg(target_os = "macos")]
+const VIRTUAL: [&str; 7] = ["utun", "awdl", "llw", "bridge", "vmnet", "vboxnet", "anpi"];
+
+/// The interface the default route goes out through.
+fn default_interface_here() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        crate::mac::default_interface()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        default_interface(&std::fs::read_to_string("/proc/net/route").unwrap_or_default())
+    }
+}
+
+/// The neighbour table, as this system prints it.
+fn arp_table_here() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        crate::mac::arp_table()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        std::fs::read_to_string("/proc/net/arp").unwrap_or_default()
+    }
+}
+
+/// What `arp -an` says of an address: "? (10.0.0.5) at a4:83:… on en0" answers, "(incomplete)"
+/// doesn't.
+#[cfg(target_os = "macos")]
+pub fn arp_of(table: &str, ip: Ipv4Addr) -> Arp {
+    let wanted = format!("({ip})");
+    match table.lines().find(|l| l.split_whitespace().nth(1) == Some(wanted.as_str())) {
+        Some(line) if line.contains(" at ") && !line.contains("incomplete") => Arp::Answers,
+        _ => Arp::Silent,
+    }
+}
 
 /// Look at everything, off the async runtime: files under /proc, and a short wait for the ARP
 /// answers that a datagram to each address on this network provokes.
 fn gather(paired: Vec<(String, Option<SocketAddr>)>, cables: Vec<UsbPhone>) -> Facts {
-    let route = std::fs::read_to_string("/proc/net/route").unwrap_or_default();
-    let vpn = default_interface(&route).filter(|i| is_vpn(i));
+    let vpn = default_interface_here().filter(|i| is_vpn(i));
     let networks: Vec<(Ipv4Addr, u8)> = if_addrs::get_if_addrs()
         .unwrap_or_default()
         .into_iter()
@@ -198,7 +238,7 @@ fn gather(paired: Vec<(String, Option<SocketAddr>)>, cables: Vec<UsbPhone>) -> F
         }
         std::thread::sleep(Duration::from_millis(500));
     }
-    let table = std::fs::read_to_string("/proc/net/arp").unwrap_or_default();
+    let table = arp_table_here();
     let phones = paired
         .into_iter()
         .map(|(name, last)| {

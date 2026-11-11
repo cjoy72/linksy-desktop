@@ -74,6 +74,10 @@ pub fn method() -> Method {
     if std::env::var_os("FLATPAK_ID").is_some() {
         return Method::Flatpak;
     }
+    // The releases are Linux packages: a Mac is built from source (scripts/install-macos.sh)
+    if cfg!(target_os = "macos") {
+        return Method::Other;
+    }
     let Some(bin) = service_binary() else { return Method::Other };
     let path = bin.to_string_lossy().into_owned();
     // The tarball installs into ~/.local (its prefix is two levels up from bin/linksyd)
@@ -179,6 +183,7 @@ pub fn check() -> Result<Option<Plan>, String> {
 pub fn manual(plan: &Plan) -> Option<String> {
     match plan.method {
         Method::Arch => Some(t!("Rebuild the Linksy package from its PKGBUILD for {version}.", version = plan.latest)),
+        Method::Other if cfg!(target_os = "macos") => Some(t!("On a Mac, Linksy is built from source. Pull {version} and run scripts/install-macos.sh again.", version = plan.latest)),
         Method::Other => Some(t!("This Linksy wasn't installed from a package. Install {version} with: curl -fsSL https://linksy.diary.mg/install.sh | sh", version = plan.latest)),
         _ => None,
     }

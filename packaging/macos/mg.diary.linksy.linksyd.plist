@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Linksy's background service as a launchd agent: starts at login, restarts after a crash.
+     scripts/install-macos.sh fills in @BINDIR@ and @LOGDIR@ and loads it. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>mg.diary.linksy.linksyd</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>@BINDIR@/linksyd</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- launchd restarts it (KeepAlive): the service's own supervisor stays out -->
+        <key>LINKSY_NO_SUPERVISOR</key>
+        <string>1</string>
+        <!-- The CLI and the service, installed beside each other -->
+        <key>PATH</key>
+        <string>@BINDIR@:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <!-- Started again after a crash or a kill, not after it quits on purpose -->
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>3</integer>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+    <key>StandardOutPath</key>
+    <string>@LOGDIR@/linksyd.log</string>
+    <key>StandardErrorPath</key>
+    <string>@LOGDIR@/linksyd.log</string>
+</dict>
+</plist>

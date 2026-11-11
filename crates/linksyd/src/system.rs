@@ -43,6 +43,10 @@ fn user_dir(key: &str, fallback: &str) -> PathBuf {
 
 /// The pretty hostname ("Sam's Laptop") if set, else the plain hostname.
 pub fn device_name() -> String {
+    #[cfg(target_os = "macos")]
+    if let Some(name) = crate::mac::computer_name() {
+        return name;
+    }
     if let Ok(info) = std::fs::read_to_string("/etc/machine-info") {
         for line in info.lines() {
             if let Some(v) = line.strip_prefix("PRETTY_HOSTNAME=") {
@@ -57,11 +61,14 @@ pub fn device_name() -> String {
         .map(|h| h.trim().to_string())
         .ok()
         .filter(|h| !h.is_empty())
-        .unwrap_or_else(|| "Linux computer".into())
+        .unwrap_or_else(|| if cfg!(target_os = "macos") { "Mac".into() } else { "Linux computer".into() })
 }
 
 /// A machine with a battery is a laptop.
 pub fn device_kind() -> DeviceKind {
+    #[cfg(target_os = "macos")]
+    let has_battery = crate::mac::has_battery();
+    #[cfg(not(target_os = "macos"))]
     let has_battery = std::fs::read_dir("/sys/class/power_supply")
         .map(|entries| entries.flatten().any(|e| e.file_name().to_string_lossy().starts_with("BAT")))
         .unwrap_or(false);

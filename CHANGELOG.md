@@ -2,6 +2,19 @@
 
 Linksy for Linux. Each version's section becomes its release notes.
 
+## Unreleased (macOS fork)
+
+### Added
+- **The service and the command line run on macOS.** `scripts/install-macos.sh` builds them
+  and installs the service as a launchd agent (`packaging/macos`). On a Mac, Linksy offers
+  phones files, the clipboard (pbcopy, pbpaste and AppleScript for images and files, with
+  automatic sync for phones that ask), links, the Inbox, photos, the phone's files, Find,
+  Lock When Away and device pictures; notifications go through Notification Center. Sessions
+  (screen, display, camera, microphone, touchpad), media, the deck, terminals and the cable
+  stay Linux. The Connection Doctor reads the Mac's routes and neighbours, `linksy logs`
+  says the macOS version and the agent's state, and the CLI's hints name launchctl.
+- CI builds, lints and tests the service and CLI on macOS.
+
 ## 0.14.0
 
 ### Changed

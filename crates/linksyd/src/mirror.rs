@@ -152,10 +152,10 @@ impl Mirror {
         Ok(())
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     pub async fn run(self, _node: Node) {}
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub async fn run(self, node: Node) {
         use linksy_core::Event;
         use tokio::sync::broadcast::error::RecvError;
@@ -289,6 +289,15 @@ impl Mirror {
                 }
             });
         });
+    }
+
+    /// macOS: a banner in Notification Center, with the phone it's from when there's more
+    /// than one. No buttons: Reply and Mute are `linksy reply` and `linksy forward mute`.
+    #[cfg(target_os = "macos")]
+    fn show(&self, node: Node, from: DeviceInfo, n: RemoteNotification, _code: Option<String>, copied: bool) {
+        let several = node.trusted().iter().filter(|t| t.device.kind == linksy_core::DeviceKind::Phone).count() > 1;
+        self.inner.shown.lock().unwrap().insert((from.id, n.key.clone()), Shown { from: from.clone(), notification: n.clone(), id: 0, generation: 0 });
+        crate::notify::show(summary(&n.title, &n.app_name, several.then_some(from.name.as_str()), copied), n.body.clone());
     }
 }
 

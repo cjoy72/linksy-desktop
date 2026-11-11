@@ -1,6 +1,7 @@
 # Linksy roadmap
 
-Linux desktop (GTK, and Qt for KDE Plasma) + Android phone. No Windows or macOS plans. Each feature lists what the
+Linux desktop (GTK, and Qt for KDE Plasma) + Android phone. Upstream has no Windows or macOS plans; this fork
+runs the service and CLI on macOS (README, "macOS"), a menu bar app being the next step there. Each feature lists what the
 desktop (`linksy-desktop`) and the phone (`linksy-mobile`, Flutter) each have to build, so
 both sides can work in parallel. Protocol details go into `docs/protocol.md` §4 as each one lands.
 

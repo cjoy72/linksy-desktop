@@ -153,8 +153,8 @@ impl Updates {
                 s.latest = Some(Latest { version: r.version, notes: r.notes.filter(|n| n.starts_with("https://")) });
             }
             for n in service.notices {
-                let for_linux = n.platforms.as_ref().is_none_or(|p| p.iter().any(|p| p == "linux"));
-                if for_linux && s.seen_notices.insert(n.id.clone()) {
+                let for_here = n.platforms.as_ref().is_none_or(|p| p.iter().any(|p| p == std::env::consts::OS));
+                if for_here && s.seen_notices.insert(n.id.clone()) {
                     notices.push(n);
                 }
             }
@@ -165,7 +165,7 @@ impl Updates {
             self.announce(&version);
         }
         for n in notices {
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             if self.notifications {
                 crate::notify::show(plain(&n.title, 120), plain(&n.body, 600));
             }
@@ -192,7 +192,11 @@ impl Updates {
                 }
             });
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "macos")]
+        if self.notifications {
+            crate::notify::show(t!("Linksy {version} is available", version), t!("See what's new and how to update.").to_string());
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         let _ = (version, self.notifications);
     }
 

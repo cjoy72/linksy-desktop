@@ -18,8 +18,16 @@ const WINDOW: Duration = Duration::from_secs(60);
 
 /// Some(exit code) when this process only watches the service, None when it is the service.
 pub fn run() -> Option<ExitCode> {
-    // systemd supervises its own, and `LINKSY_NO_SUPERVISOR=1` is for running it by hand
-    if [SUPERVISED, "INVOCATION_ID", "LINKSY_NO_SUPERVISOR"].iter().any(|v| std::env::var_os(v).is_some()) {
+    // The service itself: where the kernel can't end it with its supervisor, it watches for
+    // that on its own (die_with_parent)
+    if std::env::var_os(SUPERVISED).is_some() {
+        #[cfg(not(target_os = "linux"))]
+        watch_parent();
+        return None;
+    }
+    // systemd (and launchd, with LINKSY_NO_SUPERVISOR=1 in the agent) supervise their own, and
+    // `LINKSY_NO_SUPERVISOR=1` is for running it by hand
+    if ["INVOCATION_ID", "LINKSY_NO_SUPERVISOR"].iter().any(|v| std::env::var_os(v).is_some()) {
         return None;
     }
     let exe = std::env::current_exe().ok()?;
@@ -40,6 +48,7 @@ pub fn run() -> Option<ExitCode> {
 
 /// The service stops when the copy watching it does (a log-out, a kill): it gets a TERM and
 /// shuts down properly.
+#[cfg(target_os = "linux")]
 fn die_with_parent(parent: libc::pid_t) -> std::io::Result<()> {
     // SAFETY: sets a flag on this process; `raise` is for a parent that was already gone
     unsafe {
@@ -49,6 +58,33 @@ fn die_with_parent(parent: libc::pid_t) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Elsewhere there's no parent-death signal: the service looks every few seconds whether its
+/// supervisor is still its parent (`watch_parent`).
+#[cfg(not(target_os = "linux"))]
+fn die_with_parent(_parent: libc::pid_t) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// In the service: a TERM to itself once its supervisor is gone (it was reparented).
+#[cfg(not(target_os = "linux"))]
+fn watch_parent() {
+    // SAFETY: plain system calls on this process
+    let parent = unsafe { libc::getppid() };
+    if parent <= 1 {
+        return;
+    }
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_secs(2));
+            // SAFETY: as above
+            if unsafe { libc::getppid() } != parent {
+                unsafe { libc::raise(libc::SIGTERM) };
+                return;
+            }
+        }
+    });
 }
 
 enum Outcome {

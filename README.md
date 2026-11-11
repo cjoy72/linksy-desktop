@@ -33,6 +33,8 @@
 
 > [!NOTE]
 > This repository is the Linux side: the background service, the GTK app (GNOME and most desktops) and the Qt app (KDE Plasma). The phone needs Linksy for Android, from [linksy-releases](https://github.com/LinkSy-mg/linksy-releases/releases/latest).
+>
+> **This fork also runs on macOS**: the service and the command line, with no window yet. See [macOS](#macos) under Build.
 
 ---
 
@@ -181,6 +183,36 @@ cargo test                 # unit + end-to-end tests
 
 To leave away from home out entirely (no relay code, nothing past the local network and
 the cable), build the service with `cargo build --release -p linksyd --no-default-features`.
+
+### macOS
+
+This fork runs the service and the command line on a Mac (Apple silicon or Intel, macOS 13
+or newer). There's no window yet: the phone's app is the window, and `linksy` in a terminal
+is the computer's side. With Rust and Xcode's command line tools (`xcode-select --install`)
+installed:
+
+```sh
+scripts/install-macos.sh   # builds, installs to ~/.local/bin, starts the service at login
+linksy devices
+linksy pair "Pixel 9"        # or `linksy invite` for a QR code the phone scans
+linksy watch                 # follow activity and answer requests
+```
+
+What works on a Mac: pairing (on the same Wi-Fi, or away from home through the relay),
+files and folders both ways, the clipboard both ways (text, images and files; automatic
+sync to phones that ask), links opened in the browser, the phone's notifications and
+messages in the Inbox (`linksy inbox`, `linksy reply`), the phone's photos and files
+(`linksy files`, `linksy texts`), Find (ring, locate, snap), photo import, Lock When Away
+(the display sleeps and asks for the password), the Connection Doctor, and notifications in
+Notification Center. Screen sharing, the second display, webcam, microphone, the touchpad,
+the deck, media control, terminals and the USB cable need the Linux desktop's services and
+aren't offered to phones from a Mac.
+
+The service is a launchd agent (`~/Library/LaunchAgents/mg.diary.linksy.linksyd.plist`,
+log in `~/.local/state/linksy/linksyd.log`); `launchctl kickstart -k gui/$(id -u)/mg.diary.linksy.linksyd`
+restarts it, `scripts/uninstall-macos.sh` removes it. The first time a phone connects,
+macOS asks whether `linksyd` may accept incoming connections: allow it. `linksy upgrade`
+doesn't apply: pull the repository and run the install script again.
 
 The GTK app and the screen helper need GTK ≥ 4.14, libadwaita ≥ 1.5 and GStreamer ≥ 1.22
 headers:

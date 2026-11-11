@@ -76,7 +76,7 @@ impl Away {
                         info!("{} left: locking", device.name);
                         if lock_screen().await {
                             history.record_incoming(&device, Shared::Locked);
-                            #[cfg(target_os = "linux")]
+                            #[cfg(any(target_os = "linux", target_os = "macos"))]
                             crate::notify::show(t!("Locked because {device} left", device = device.name), t!("It locks whenever it leaves. Change this on its page in Linksy.").into());
                         }
                     }
@@ -129,6 +129,21 @@ pub(crate) async fn lock_screen() -> bool {
     if let Ok(cmd) = std::env::var("LINKSY_LOCK_COMMAND") {
         return tokio::process::Command::new("sh").arg("-c").arg(cmd).status().await.is_ok_and(|s| s.success());
     }
+    lock_here().await
+}
+
+/// The display sleeps, and macOS asks for the password when it wakes.
+#[cfg(target_os = "macos")]
+async fn lock_here() -> bool {
+    let locked = crate::mac::lock_screen().await;
+    if !locked {
+        warn!("could not lock the screen");
+    }
+    locked
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn lock_here() -> bool {
     #[cfg(target_os = "linux")]
     if let Ok(bus) = zbus::Connection::session().await {
         for (name, path) in [("org.gnome.ScreenSaver", "/org/gnome/ScreenSaver"), ("org.freedesktop.ScreenSaver", "/org/freedesktop/ScreenSaver")] {
@@ -152,6 +167,7 @@ pub(crate) async fn lock_screen() -> bool {
 }
 
 /// The installed screen locker for this desktop, if it needs one run by hand.
+#[cfg(not(target_os = "macos"))]
 fn locker() -> Option<&'static [&'static str]> {
     let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().to_lowercase();
     let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
@@ -176,6 +192,7 @@ fn locker() -> Option<&'static [&'static str]> {
 
 /// Start the locker (the computer's, from the Flatpak). Some stay running until unlocked
 /// (hyprlock, i3lock): still there after a moment, or done without an error, it locked.
+#[cfg(not(target_os = "macos"))]
 async fn run_locker(locker: &[&str]) -> bool {
     let mut child = match tokio::process::Command::from(linksy_host::detached(locker[0], &[])).args(&locker[1..]).kill_on_drop(false).spawn() {
         Ok(c) => c,

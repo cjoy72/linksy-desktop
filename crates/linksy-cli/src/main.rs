@@ -60,6 +60,11 @@ Usage:
 
 <device> is a name, a short id like A1B2-C3D4, or a full id.";
 
+/// How the service is started and restarted by hand: systemd on Linux, launchd on macOS
+/// (packaging/macos, scripts/install-macos.sh).
+const START_SERVICE: &str = if cfg!(target_os = "macos") { "launchctl kickstart gui/$(id -u)/mg.diary.linksy.linksyd" } else { "systemctl --user start linksyd" };
+const RESTART_SERVICE: &str = if cfg!(target_os = "macos") { "launchctl kickstart -k gui/$(id -u)/mg.diary.linksy.linksyd" } else { "systemctl --user restart linksyd" };
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -88,7 +93,7 @@ async fn main() -> ExitCode {
     let client = match Client::connect().await {
         Ok(c) => c,
         Err(_) => {
-            eprintln!("Linksy service is not running. Start it with `linksyd` or `systemctl --user start linksyd`.");
+            eprintln!("Linksy service is not running. Start it with `linksyd` or `{START_SERVICE}`.");
             return ExitCode::FAILURE;
         }
     };
@@ -110,7 +115,7 @@ async fn version() -> ExitCode {
         && !s.version.is_empty()
         && s.version != linksy_upgrade::VERSION
     {
-        println!("The running service is {}: restart it with `systemctl --user restart linksyd`.", s.version);
+        println!("The running service is {}: restart it with `{RESTART_SERVICE}`.", s.version);
     }
     ExitCode::SUCCESS
 }

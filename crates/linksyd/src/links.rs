@@ -6,6 +6,9 @@ use linksy_core::{Event, Node};
 use tokio::sync::broadcast::error::RecvError;
 use tracing::{info, warn};
 
+/// The system's own way to open a link in the default browser.
+const OPENER: &str = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+
 pub async fn run(node: Node) {
     let mut events = node.subscribe();
     loop {
@@ -16,7 +19,7 @@ pub async fn run(node: Node) {
         };
         // The core only lets http(s) links through, so this never opens a file or a program.
         // In a Flatpak, xdg-open hands the link to the OpenURI portal.
-        match Command::new("xdg-open").arg(&url).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
+        match Command::new(OPENER).arg(&url).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
             Ok(mut child) => {
                 info!("opening a link from {from}");
                 std::thread::spawn(move || child.wait());

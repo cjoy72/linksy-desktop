@@ -6,6 +6,9 @@
 //! X and Y are fractions of the screen (0.5 0.5 is the middle). With no option it taps the
 //! middle, then types "hello".
 
+#![cfg_attr(not(target_os = "linux"), allow(unused))]
+
+#[cfg(target_os = "linux")]
 #[path = "../src/usb_hid.rs"]
 #[allow(dead_code)]
 mod usb_hid;
@@ -13,8 +16,16 @@ mod usb_hid;
 use std::time::Duration;
 
 use linksy_core::{ControlMsg, MouseButton};
+#[cfg(target_os = "linux")]
 use nusb::transfer::{ControlIn, ControlType, Recipient};
 
+/// The cable (Android Open Accessory) is Linux only.
+#[cfg(not(target_os = "linux"))]
+fn main() {
+    println!("the cable's virtual input is Linux only");
+}
+
+#[cfg(target_os = "linux")]
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();

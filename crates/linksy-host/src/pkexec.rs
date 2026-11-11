@@ -109,7 +109,7 @@ fn attempt(argv: &[OsString], ask: &mut impl FnMut(&Prompt) -> Option<String>, l
 /// pkexec on a terminal of its own.
 fn spawn(argv: &[OsString]) -> std::io::Result<(OwnedFd, Child)> {
     let (mut master, mut slave) = (-1, -1);
-    if unsafe { libc::openpty(&mut master, &mut slave, std::ptr::null_mut(), std::ptr::null(), std::ptr::null()) } != 0 {
+    if unsafe { libc::openpty(&mut master, &mut slave, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) } != 0 {
         return Err(std::io::Error::last_os_error());
     }
     let (master, slave) = unsafe { (OwnedFd::from_raw_fd(master), OwnedFd::from_raw_fd(slave)) };
@@ -123,7 +123,7 @@ fn spawn(argv: &[OsString]) -> std::io::Result<(OwnedFd, Child)> {
         cmd.pre_exec(move || {
             // Its own session, with the terminal as its controlling one, where pkexec asks.
             // From the Flatpak, the computer's side makes it pkexec's instead.
-            if libc::setsid() < 0 || (!flatpak && libc::ioctl(0, libc::TIOCSCTTY, 0) < 0) {
+            if libc::setsid() < 0 || (!flatpak && libc::ioctl(0, libc::TIOCSCTTY as _, 0) < 0) {
                 return Err(std::io::Error::last_os_error());
             }
             Ok(())

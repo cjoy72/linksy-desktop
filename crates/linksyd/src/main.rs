@@ -2,6 +2,10 @@
 //! and shows native notifications. Front ends (the app, the `linksy` CLI) talk to it over
 //! a Unix socket and can come and go.
 
+#[cfg(not(target_os = "macos"))]
+mod clipboard;
+#[cfg(target_os = "macos")]
+#[path = "clipboard_mac.rs"]
 mod clipboard;
 mod codes;
 #[cfg(target_os = "linux")]
@@ -46,12 +50,18 @@ mod direct;
 mod media;
 #[cfg(target_os = "linux")]
 mod notify;
+#[cfg(target_os = "macos")]
+#[path = "notify_mac.rs"]
+mod notify;
+#[cfg(target_os = "macos")]
+mod mac;
 mod single;
 mod system;
 #[cfg(target_os = "linux")]
 mod tray;
 #[cfg(target_os = "linux")]
 mod usb;
+#[cfg(target_os = "linux")]
 mod usb_hid;
 #[cfg(target_os = "linux")]
 mod volume;
@@ -66,15 +76,32 @@ use tracing::{error, info};
 pub static QUIT: tokio::sync::Notify = tokio::sync::Notify::const_new();
 
 /// What a Linux computer running Linksy can do for other devices.
+#[cfg(target_os = "linux")]
 const FEATURES: &[&str] = &[
     "files", "clipboard", "open_url", "ring", "battery", "media_state", "media_remote", "call_state", "heartbeat",
     "import", "fs", "input", "screen", "control", "display", "camera", "watch", "notifications", "sms",
     "clipboard_file", "microphone", "picture", "deck", "deck_layout_save", "preflight",
 ];
 
+/// What a Mac running Linksy can do for other devices: files, the clipboard, links, the
+/// phone's notifications and messages in the Inbox, photos, the phone's files, Find and
+/// Lock When Away. Sessions (screen, camera, display, input), media, the deck and the
+/// cable need the Linux desktop's services, and aren't offered.
+#[cfg(target_os = "macos")]
+const FEATURES: &[&str] = &[
+    "files", "clipboard", "open_url", "ring", "battery", "heartbeat", "import", "fs", "notifications", "sms",
+    "clipboard_file", "picture", "preflight",
+];
+
+/// Anything else: the core only.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+const FEATURES: &[&str] = &["files", "clipboard", "open_url", "ring", "battery", "heartbeat", "import", "fs", "picture", "preflight"];
+
 /// Fixed default port so a peer's last known address stays valid across restarts.
 const DEFAULT_PORT: u16 = 47_200;
 
+// USB and Wi-Fi Direct are the Linux service's
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 struct Args {
     config: Config,
     socket: PathBuf,
@@ -243,7 +270,7 @@ async fn run() -> ExitCode {
     };
     info!("{} ({}) ready, saving files to {}", node.info().name, node.info().id.short(), node.settings().download_dir.display());
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     if args.notifications {
         tokio::spawn(notify::run(node.clone()));
     }
